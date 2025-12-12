@@ -48,6 +48,12 @@ type RateLimitConfig struct {
 	DefaultPerMinute int `yaml:"defaultPerMinute"`
 }
 
+type WorkerConfig struct {
+	MaxConcurrentJobs       int `yaml:"maxConcurrentJobs"`
+	PollIntervalMs          int `yaml:"pollIntervalMs"`
+	MaxConcurrentURLsPerJob int `yaml:"maxConcurrentURLsPerJob"`
+}
+
 type OpenAIConfig struct {
 	APIKey  string `yaml:"apiKey"`
 	BaseURL string `yaml:"baseURL"`
@@ -81,6 +87,7 @@ type Config struct {
 	Redis     RedisConfig     `yaml:"redis"`
 	Auth      AuthConfig      `yaml:"auth"`
 	RateLimit RateLimitConfig `yaml:"ratelimit"`
+	Worker    WorkerConfig    `yaml:"worker"`
 	LLM       LLMConfig       `yaml:"llm"`
 }
 

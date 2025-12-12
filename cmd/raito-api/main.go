@@ -19,6 +19,7 @@ import (
 
 func main() {
 	configPath := flag.String("config", "config/config.yaml", "path to config file")
+	role := flag.String("role", "all", "process role: api|worker|all")
 	flag.Parse()
 
 	cfg := config.Load(*configPath)
@@ -50,13 +51,27 @@ func main() {
 	// Set up logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{}))
 
-	// Start background crawl worker to process pending jobs.
 	rootCtx := context.Background()
-	server.StartCrawlWorker(rootCtx, cfg, st)
 
-	s := server.NewServer(cfg, st, logger)
-
-	if err := s.Listen(); err != nil {
-		log.Fatalf("server failed: %v", err)
+	switch *role {
+	case "api":
+		// API-only: do not start crawl worker.
+		s := server.NewServer(cfg, st, logger)
+		if err := s.Listen(); err != nil {
+			log.Fatalf("server failed: %v", err)
+		}
+	case "worker":
+		// Worker-only: start crawl worker and block.
+		server.StartCrawlWorker(rootCtx, cfg, st)
+		select {}
+	case "all":
+		// Default: run both API and worker in one process.
+		server.StartCrawlWorker(rootCtx, cfg, st)
+		s := server.NewServer(cfg, st, logger)
+		if err := s.Listen(); err != nil {
+			log.Fatalf("server failed: %v", err)
+		}
+	default:
+		log.Fatalf("invalid role: %s (expected api|worker|all)", *role)
 	}
 }

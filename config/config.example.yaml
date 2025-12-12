@@ -30,7 +30,13 @@ auth:
 ratelimit:
   defaultPerMinute: 60
 
+worker:
+  maxConcurrentJobs: 4
+  pollIntervalMs: 2000
+  maxConcurrentURLsPerJob: 1
+ 
 llm:
+
   defaultProvider: "openai" # or anthropic, google
   openai:
     apiKey: "${OPENAI_API_KEY}"                 # set via env or secrets in prod
