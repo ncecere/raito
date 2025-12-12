@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /app
 
@@ -16,7 +19,7 @@ RUN go mod download
 COPY . .
 
 # Build the API binary
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /raito-api ./cmd/raito-api
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /raito-api ./cmd/raito-api
 
 # Runtime stage
 FROM alpine:3.20
