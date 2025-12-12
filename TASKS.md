@@ -65,9 +65,9 @@
   - [x] Accepts URLs and a simple JSON schema or prompt.
   - [x] Scrapes URLs and calls a configured LLM provider to produce structured JSON.
 
-## Housekeeping
+## Phase 6 – Reliability, Roles & Concurrency
 
-- [x] Add logging wrappers with contextual fields (request id, method, path).
-- [x] Add minimal metrics (request counts, latencies, error rates).
-- [x] Add configuration/env documentation for running Raito locally.
-- [x] Revisit DB connection handling to use a shared *sql.DB with proper pooling instead of opening a new connection per Store call.
+- [x] Add a `-role` flag (`api|worker|all`) to `cmd/raito-api` and wire roles so API and worker processes can be run separately or together.
+- [x] Add worker configuration to `config/config.yaml` (e.g. `worker.maxConcurrentJobs`, `worker.pollIntervalMs`) and enforce a max number of concurrent crawl jobs per worker in `StartCrawlWorker`.
+- [x] Optionally add per-job URL concurrency controls in `runCrawlJob`.
+- [x] Enhance health checks to cover DB and Redis connectivity (and rod when enabled), either via `/healthz?deep=true` or a dedicated `/healthz/deps` endpoint.

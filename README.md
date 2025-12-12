@@ -15,7 +15,7 @@ This document explains how to set up, run, and use the Raito API locally.
 Inside the `raito/` directory:
 
 - `cmd/raito-api/` – main API server entrypoint
-- `config/config.yaml` – application configuration
+- `config/config.yaml` – application configuration (local, not committed; see `config/config.example.yaml`)
 - `db/migrations/` – goose migrations for Postgres
 - `db/queries/` – sqlc query definitions
 - `internal/config/` – config loading
@@ -25,6 +25,31 @@ Inside the `raito/` directory:
 - `internal/store/` – DB store using sqlc models
 - `internal/llm/` – LLM abstraction (OpenAI, Anthropic, Google)
 - `internal/metrics/` – simple Prometheus-style request/LLM metrics
+
+## Releases & Docker images
+
+- GitHub repository: `https://github.com/ncecere/raito`
+- Releases (binaries): `https://github.com/ncecere/raito/releases`
+  - Tags like `v0.1.1` trigger a release and attach cross-platform binaries.
+- Docker images (GHCR):
+  - `docker pull ghcr.io/ncecere/raito-api:latest`
+  - `docker pull ghcr.io/ncecere/raito-api:v0.1.1`
+
+Example: run the latest image (assuming Postgres/Redis available as in `docker-compose.yaml`):
+
+```bash
+docker run --rm -p 8080:8080 \
+  --name raito-api \
+  ghcr.io/ncecere/raito-api:latest
+```
+
+You can override the config path or mount your own config directory if needed, e.g.:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v "$(pwd)/config:/app/config" \
+  ghcr.io/ncecere/raito-api:latest /app/raito-api -config /app/config/config.yaml
+```
 
 ## Configuration
 
@@ -59,11 +84,17 @@ redis:
 auth:
   enabled: true
   initialAdminKey: "raito_admin_dev_key"
-
+ 
 ratelimit:
   defaultPerMinute: 60
 
+worker:
+  maxConcurrentJobs: 4
+  pollIntervalMs: 2000
+  maxConcurrentURLsPerJob: 1
+ 
 llm:
+
   defaultProvider: "openai" # or anthropic, google
   openai:
     apiKey: ""
@@ -84,6 +115,10 @@ Notes:
 - **Auth** – `initialAdminKey` is hashed and stored as an admin API key on startup.
 - **rod** – if enabled and `browserURL` is set, `/v1/scrape` can use a headless browser via rod when `useBrowser=true`.
 - **llm** – configure API keys and default models for OpenAI, Anthropic, and Google (Gemini). The `baseURL` for OpenAI lets you use OpenAI-compatible APIs.
+- **worker** – controls crawl worker behavior:
+  - `maxConcurrentJobs`: max crawl jobs processed concurrently per worker process.
+  - `pollIntervalMs`: how often the worker polls for pending jobs.
+  - `maxConcurrentURLsPerJob`: max URLs scraped in parallel within a single crawl job.
 
 ### Config examples
 
