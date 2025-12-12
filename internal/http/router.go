@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -70,23 +71,64 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 		return err
 	})
 
-	// Basic health endpoint
-	app.Get("/healthz", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok"})
-	})
-	// Prometheus-style metrics endpoint
-	app.Get("/metrics", func(c *fiber.Ctx) error {
-		c.Type("text/plain")
-		return c.SendString(metrics.Export())
-	})
-
-	// Redis client for rate limiting
+	// Redis client for rate limiting and health checks
 	var rdb *redis.Client
 	if cfg.Auth.Enabled && cfg.Redis.URL != "" {
 		if opt, err := redis.ParseURL(cfg.Redis.URL); err == nil {
 			rdb = redis.NewClient(opt)
 		}
 	}
+
+	// Health endpoints
+	app.Get("/healthz", func(c *fiber.Ctx) error {
+		// Shallow health: process is up
+		if c.Query("deep") != "true" {
+			return c.JSON(fiber.Map{"status": "ok"})
+		}
+
+		// Deep health: check DB and Redis connectivity, and rod configuration.
+		ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
+		defer cancel()
+
+		dbStatus := "ok"
+		if err := st.DB.PingContext(ctx); err != nil {
+			dbStatus = "error"
+		}
+
+		redisStatus := "disabled"
+		if rdb != nil {
+			if err := rdb.Ping(ctx).Err(); err != nil {
+				redisStatus = "error"
+			} else {
+				redisStatus = "ok"
+			}
+		}
+
+		rodStatus := "disabled"
+		if cfg.Rod.Enabled {
+			// For now, just report that rod is enabled; a full browser connectivity
+			// check would be more expensive and is left as a future enhancement.
+			rodStatus = "enabled"
+		}
+
+		status := "ok"
+		if dbStatus != "ok" || redisStatus == "error" {
+			status = "error"
+		}
+
+		return c.JSON(fiber.Map{
+			"status": status,
+			"db":     dbStatus,
+			"redis":  redisStatus,
+			"rod":    rodStatus,
+		})
+	})
+
+	// Prometheus-style metrics endpoint
+	app.Get("/metrics", func(c *fiber.Ctx) error {
+		c.Type("text/plain")
+		return c.SendString(metrics.Export())
+	})
 
 	authMw := authMiddleware(cfg, st)
 	var rateMw fiber.Handler
