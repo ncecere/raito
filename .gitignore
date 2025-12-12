@@ -1,0 +1,31 @@
+# Binaries
+/raito-api
+/dist/
+/bin/
+/build/
+
+# Go build/test outputs
+**/*.exe
+**/*.test
+*.out
+
+# Coverage
+coverage*
+*.coverprofile
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Dependency/vendor (if ever used)
+/vendor/
+
+# Environment / local config overrides
+.env
+.env.*

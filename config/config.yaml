@@ -1,0 +1,44 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+scraper:
+  userAgent: "RaitoBot/1.0"
+  timeoutMs: 30000
+
+crawler:
+  maxDepthDefault: 3
+  maxPagesDefault: 100
+
+robots:
+  respect: true
+
+rod:
+  enabled: true
+  browserURL: "" # e.g. ws://127.0.0.1:9222
+
+database:
+  dsn: "postgres://raito:raito@localhost:5432/raito?sslmode=disable"
+
+redis:
+  url: "redis://localhost:6379"
+
+auth:
+  enabled: true
+  initialAdminKey: "raito_admin_dev_key"
+
+ratelimit:
+  defaultPerMinute: 60
+
+llm:
+  defaultProvider: "openai" # or anthropic, google
+  openai:
+    apiKey: "sk-A-FZyGH2oiZe8_HbjCOVzg"                 # set via env or secrets in prod
+    baseURL: "https://api.ai.it.ufl.edu/v1" # override for OpenAI-compatible APIs
+    model: "gpt-oss-20b"
+  anthropic:
+    apiKey: ""
+    model: "claude-3-5-sonnet-20241022"
+  google:
+    apiKey: ""
+    model: "gemini-1.5-flash"
