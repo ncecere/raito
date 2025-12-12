@@ -29,3 +29,6 @@ coverage*
 # Environment / local config overrides
 .env
 .env.*
+
+# Local config (contains secrets)
+config/config.yaml

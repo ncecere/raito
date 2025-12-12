@@ -25,7 +25,7 @@ redis:
 
 auth:
   enabled: true
-  initialAdminKey: "raito_admin_dev_key"
+  initialAdminKey: "change_me_admin_key"
 
 ratelimit:
   defaultPerMinute: 60
@@ -33,12 +33,12 @@ ratelimit:
 llm:
   defaultProvider: "openai" # or anthropic, google
   openai:
-    apiKey: "sk-"                 # set via env or secrets in prod
-    baseURL: "https://api.ai.it.ufl.edu/v1" # override for OpenAI-compatible APIs
-    model: "gpt-oss-20b"
+    apiKey: "${OPENAI_API_KEY}"                 # set via env or secrets in prod
+    baseURL: "https://api.openai.com/v1"        # override for OpenAI-compatible APIs
+    model: "gpt-4.1-mini"
   anthropic:
-    apiKey: ""
+    apiKey: "${ANTHROPIC_API_KEY}"
     model: "claude-3-5-sonnet-20241022"
   google:
-    apiKey: ""
+    apiKey: "${GOOGLE_API_KEY}"
     model: "gemini-1.5-flash"
