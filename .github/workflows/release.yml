@@ -25,7 +25,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           # Adjust if you upgrade the Go version
-          go-version: '1.22.x'
+          go-version: '1.24.x'
 
       - name: Build binary
         run: |
