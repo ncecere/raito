@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +19,18 @@ import (
 // database for pending crawl jobs and processes them.
 func StartCrawlWorker(ctx context.Context, cfg *config.Config, st *store.Store) {
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		pollInterval := time.Duration(cfg.Worker.PollIntervalMs) * time.Millisecond
+		if pollInterval <= 0 {
+			pollInterval = 2 * time.Second
+		}
+
+		maxJobs := cfg.Worker.MaxConcurrentJobs
+		if maxJobs <= 0 {
+			maxJobs = 4
+		}
+
+		sem := make(chan struct{}, maxJobs)
+		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 
 		for {
@@ -28,7 +40,13 @@ func StartCrawlWorker(ctx context.Context, cfg *config.Config, st *store.Store) 
 			case <-ticker.C:
 			}
 
-			jobs, err := st.ListPendingCrawlJobs(ctx, 10)
+			// Determine how many new jobs we can start based on current concurrency.
+			capacity := maxJobs - len(sem)
+			if capacity <= 0 {
+				continue
+			}
+
+			jobs, err := st.ListPendingCrawlJobs(ctx, int32(capacity))
 			if err != nil {
 				// TODO: add logging once logging is in place
 				continue
@@ -36,7 +54,10 @@ func StartCrawlWorker(ctx context.Context, cfg *config.Config, st *store.Store) 
 
 			for _, job := range jobs {
 				job := job
+				sem <- struct{}{}
 				go func() {
+					defer func() { <-sem }()
+
 					// Decode the original crawl request from the job input.
 					var req CrawlRequest
 					if err := json.Unmarshal(job.Input, &req); err != nil {
@@ -122,48 +143,82 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 	}
 
 	s := scraper.NewHTTPScraper(timeout)
-	successCount := 0
 
-	for _, u := range urls {
-		select {
-		case <-ctx.Done():
-			msg := ctx.Err().Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
-			return
-		default:
-		}
-
-		res, err := s.Scrape(ctx, scraper.Request{
-			URL:       u,
-			Headers:   map[string]string{},
-			Timeout:   timeout,
-			UserAgent: cfg.Scraper.UserAgent,
-		})
-		if err != nil {
-			continue
-		}
-
-		md := model.Metadata{
-			Title:       toString(res.Metadata["title"]),
-			Description: toString(res.Metadata["description"]),
-			SourceURL:   toString(res.Metadata["sourceURL"]),
-			StatusCode:  res.Status,
-		}
-		metaBytes, err := json.Marshal(md)
-		if err != nil {
-			continue
-		}
-
-		statusCode := int32(res.Status)
-		markdown := res.Markdown
-		html := res.HTML
-		raw := res.RawHTML
-
-		_ = st.AddDocument(ctx, jobID, res.URL, &markdown, &html, &raw, metaBytes, &statusCode)
-		successCount++
+	maxPerJob := cfg.Worker.MaxConcurrentURLsPerJob
+	if maxPerJob <= 0 {
+		maxPerJob = 1
 	}
 
-	if successCount == 0 {
+	var successCount int32
+	sem := make(chan struct{}, maxPerJob)
+	// Use a channel to wait for all URL scrapes to finish.
+	doneCh := make(chan struct{})
+
+	go func() {
+		for _, u := range urls {
+			select {
+			case <-ctx.Done():
+				return
+			case sem <- struct{}{}:
+			}
+
+			u := u
+			go func() {
+				defer func() { <-sem }()
+
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				res, err := s.Scrape(ctx, scraper.Request{
+					URL:       u,
+					Headers:   map[string]string{},
+					Timeout:   timeout,
+					UserAgent: cfg.Scraper.UserAgent,
+				})
+				if err != nil {
+					return
+				}
+
+				md := model.Metadata{
+					Title:       toString(res.Metadata["title"]),
+					Description: toString(res.Metadata["description"]),
+					SourceURL:   toString(res.Metadata["sourceURL"]),
+					StatusCode:  res.Status,
+				}
+				metaBytes, err := json.Marshal(md)
+				if err != nil {
+					return
+				}
+
+				statusCode := int32(res.Status)
+				markdown := res.Markdown
+				html := res.HTML
+				raw := res.RawHTML
+
+				_ = st.AddDocument(ctx, jobID, res.URL, &markdown, &html, &raw, metaBytes, &statusCode)
+				atomic.AddInt32(&successCount, 1)
+			}()
+		}
+
+		// Wait for all goroutines to drain the semaphore.
+		for i := 0; i < maxPerJob; i++ {
+			sem <- struct{}{}
+		}
+		close(doneCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+		msg := ctx.Err().Error()
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		return
+	case <-doneCh:
+	}
+
+	if atomic.LoadInt32(&successCount) == 0 {
 		msg := "no pages successfully scraped"
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 		return

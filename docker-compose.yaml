@@ -1,6 +1,5 @@
-version: "3.9"
-
 services:
+
   postgres:
     image: postgres:16
     container_name: raito-postgres
@@ -23,6 +22,52 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - raito-redis-data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: raito-api:latest
+    container_name: raito-api
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./config:/app/config:ro
+    # Note: for this all-in-docker setup, your database.dsn in config.yaml should
+    # point to host "postgres" (e.g. postgres://raito:raito@postgres:5432/raito?sslmode=disable).
+    command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "api"]
+    ports:
+      - "8080:8080"
+
+  worker1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: raito-api:latest
+    container_name: raito-worker-1
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./config:/app/config:ro
+    command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "worker"]
+
+  worker2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: raito-api:latest
+    container_name: raito-worker-2
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./config:/app/config:ro
+    command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "worker"]
 
 volumes:
   raito-postgres-data:
