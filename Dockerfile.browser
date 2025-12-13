@@ -1,0 +1,33 @@
+FROM debian:12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates chromium socat \
+    fonts-liberation fonts-noto-color-emoji locales \
+ && rm -rf /var/lib/apt/lists/* \
+ && sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
+ && locale-gen
+
+ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+EXPOSE 9222
+
+# Run chrome on 127.0.0.1:9223, forward 0.0.0.0:9222 -> 127.0.0.1:9223.
+# If Chromium exits for any reason, the container exits so Docker/K8s can
+# restart the whole browser pool instead of leaving socat running alone.
+CMD sh -lc '\
+  chromium \
+    --headless=new \
+    --disable-gpu \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --remote-debugging-address=127.0.0.1 \
+    --remote-debugging-port=9223 \
+    about:blank & \
+  CH_PID=$!; \
+  socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223 & \
+  SOC_PID=$!; \
+  wait "$CH_PID" \
+'

@@ -9,17 +9,36 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/sqlc-dev/pqtype"
 )
 
 const getJobByID = `-- name: GetJobByID :one
-SELECT id, type, status, url, input, error, created_at, updated_at, completed_at FROM jobs WHERE id = $1
+SELECT id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output
+FROM jobs
+WHERE id = $1
 `
 
-func (q *Queries) GetJobByID(ctx context.Context, id uuid.UUID) (Job, error) {
+type GetJobByIDRow struct {
+	ID          uuid.UUID
+	Type        string
+	Status      string
+	Url         string
+	Input       json.RawMessage
+	Error       sql.NullString
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt sql.NullTime
+	Sync        bool
+	Priority    int32
+	Output      pqtype.NullRawMessage
+}
+
+func (q *Queries) GetJobByID(ctx context.Context, id uuid.UUID) (GetJobByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getJobByID, id)
-	var i Job
+	var i GetJobByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.Type,
@@ -30,33 +49,55 @@ func (q *Queries) GetJobByID(ctx context.Context, id uuid.UUID) (Job, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.Sync,
+		&i.Priority,
+		&i.Output,
 	)
 	return i, err
 }
 
 const insertJob = `-- name: InsertJob :one
-INSERT INTO jobs (id, type, status, url, input)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, type, status, url, input, error, created_at, updated_at, completed_at
+INSERT INTO jobs (id, type, status, url, input, sync, priority)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output
 `
 
 type InsertJobParams struct {
-	ID     uuid.UUID
-	Type   string
-	Status string
-	Url    string
-	Input  json.RawMessage
+	ID       uuid.UUID
+	Type     string
+	Status   string
+	Url      string
+	Input    json.RawMessage
+	Sync     bool
+	Priority int32
 }
 
-func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, error) {
+type InsertJobRow struct {
+	ID          uuid.UUID
+	Type        string
+	Status      string
+	Url         string
+	Input       json.RawMessage
+	Error       sql.NullString
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt sql.NullTime
+	Sync        bool
+	Priority    int32
+	Output      pqtype.NullRawMessage
+}
+
+func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (InsertJobRow, error) {
 	row := q.db.QueryRowContext(ctx, insertJob,
 		arg.ID,
 		arg.Type,
 		arg.Status,
 		arg.Url,
 		arg.Input,
+		arg.Sync,
+		arg.Priority,
 	)
-	var i Job
+	var i InsertJobRow
 	err := row.Scan(
 		&i.ID,
 		&i.Type,
@@ -67,26 +108,45 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.Sync,
+		&i.Priority,
+		&i.Output,
 	)
 	return i, err
 }
 
-const listPendingCrawlJobs = `-- name: ListPendingCrawlJobs :many
-SELECT id, type, status, url, input, error, created_at, updated_at, completed_at FROM jobs
-WHERE type = 'crawl' AND status = 'pending'
-ORDER BY created_at ASC
+const listPendingJobs = `-- name: ListPendingJobs :many
+SELECT id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output
+FROM jobs
+WHERE status = 'pending'
+ORDER BY priority DESC, created_at ASC
 LIMIT $1
 `
 
-func (q *Queries) ListPendingCrawlJobs(ctx context.Context, limit int32) ([]Job, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingCrawlJobs, limit)
+type ListPendingJobsRow struct {
+	ID          uuid.UUID
+	Type        string
+	Status      string
+	Url         string
+	Input       json.RawMessage
+	Error       sql.NullString
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt sql.NullTime
+	Sync        bool
+	Priority    int32
+	Output      pqtype.NullRawMessage
+}
+
+func (q *Queries) ListPendingJobs(ctx context.Context, limit int32) ([]ListPendingJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingJobs, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Job
+	var items []ListPendingJobsRow
 	for rows.Next() {
-		var i Job
+		var i ListPendingJobsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Type,
@@ -97,6 +157,9 @@ func (q *Queries) ListPendingCrawlJobs(ctx context.Context, limit int32) ([]Job,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.CompletedAt,
+			&i.Sync,
+			&i.Priority,
+			&i.Output,
 		); err != nil {
 			return nil, err
 		}
@@ -109,6 +172,23 @@ func (q *Queries) ListPendingCrawlJobs(ctx context.Context, limit int32) ([]Job,
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateJobOutput = `-- name: UpdateJobOutput :exec
+UPDATE jobs
+SET output = $2,
+    updated_at = NOW()
+WHERE id = $1
+`
+
+type UpdateJobOutputParams struct {
+	ID     uuid.UUID
+	Output pqtype.NullRawMessage
+}
+
+func (q *Queries) UpdateJobOutput(ctx context.Context, arg UpdateJobOutputParams) error {
+	_, err := q.db.ExecContext(ctx, updateJobOutput, arg.ID, arg.Output)
+	return err
 }
 
 const updateJobStatus = `-- name: UpdateJobStatus :exec

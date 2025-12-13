@@ -6,9 +6,13 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/sqlc-dev/pqtype"
 
 	"raito/internal/db"
 )
@@ -37,8 +41,8 @@ func (s *Store) withQueries(ctx context.Context, fn func(ctx context.Context, q 
 	return fn(ctx, q)
 }
 
-// CreateCrawlJob inserts a new crawl job row.
-func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, input any) (db.Job, error) {
+// CreateJob inserts a new job row with the given parameters.
+func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string, input any, sync bool, priority int32) (db.Job, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return db.Job{}, err
@@ -46,18 +50,42 @@ func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, in
 
 	var job db.Job
 	err = s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
-		var err error
-		job, err = q.InsertJob(ctx, db.InsertJobParams{
-			ID:     id,
-			Type:   "crawl",
-			Status: "pending",
-			Url:    url,
-			Input:  payload,
+		row, err := q.InsertJob(ctx, db.InsertJobParams{
+			ID:       id,
+			Type:     jobType,
+			Status:   "pending",
+			Url:      url,
+			Input:    payload,
+			Sync:     sync,
+			Priority: priority,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+
+		job = db.Job{
+			ID:          row.ID,
+			Type:        row.Type,
+			Status:      row.Status,
+			Url:         row.Url,
+			Input:       row.Input,
+			Error:       row.Error,
+			CreatedAt:   row.CreatedAt,
+			UpdatedAt:   row.UpdatedAt,
+			CompletedAt: row.CompletedAt,
+			Priority:    row.Priority,
+			Sync:        row.Sync,
+			Output:      row.Output,
+		}
+		return nil
 	})
 
 	return job, err
+}
+
+// CreateCrawlJob inserts a new crawl job row.
+func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, input any) (db.Job, error) {
+	return s.CreateJob(ctx, id, "crawl", url, input, false, 10)
 }
 
 // UpdateCrawlJobStatus updates the status and optional error message for a crawl job.
@@ -77,7 +105,7 @@ func (s *Store) UpdateCrawlJobStatus(ctx context.Context, id uuid.UUID, status s
 }
 
 // AddDocument stores a scraped document row.
-func (s *Store) AddDocument(ctx context.Context, jobID uuid.UUID, url string, markdown, html, rawHTML *string, metadata json.RawMessage, statusCode *int32) error {
+func (s *Store) AddDocument(ctx context.Context, jobID uuid.UUID, url string, markdown, html, rawHTML *string, metadata json.RawMessage, statusCode *int32, engine *string) error {
 	var m, h, r sql.NullString
 	if markdown != nil {
 		m = sql.NullString{String: *markdown, Valid: true}
@@ -92,6 +120,10 @@ func (s *Store) AddDocument(ctx context.Context, jobID uuid.UUID, url string, ma
 	if statusCode != nil {
 		sc = sql.NullInt32{Int32: *statusCode, Valid: true}
 	}
+	var eng sql.NullString
+	if engine != nil {
+		eng = sql.NullString{String: *engine, Valid: true}
+	}
 
 	return s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
 		return q.InsertDocument(ctx, db.InsertDocumentParams{
@@ -102,6 +134,7 @@ func (s *Store) AddDocument(ctx context.Context, jobID uuid.UUID, url string, ma
 			RawHtml:    r,
 			Metadata:   metadata,
 			StatusCode: sc,
+			Engine:     eng,
 		})
 	})
 }
@@ -112,11 +145,26 @@ func (s *Store) GetCrawlJobAndDocuments(ctx context.Context, id uuid.UUID) (db.J
 	var docs []db.Document
 
 	err := s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
-		var err error
-		job, err = q.GetJobByID(ctx, id)
+		row, err := q.GetJobByID(ctx, id)
 		if err != nil {
 			return err
 		}
+
+		job = db.Job{
+			ID:          row.ID,
+			Type:        row.Type,
+			Status:      row.Status,
+			Url:         row.Url,
+			Input:       row.Input,
+			Error:       row.Error,
+			CreatedAt:   row.CreatedAt,
+			UpdatedAt:   row.UpdatedAt,
+			CompletedAt: row.CompletedAt,
+			Priority:    row.Priority,
+			Sync:        row.Sync,
+			Output:      row.Output,
+		}
+
 		docs, err = q.GetDocumentsByJobID(ctx, id)
 		return err
 	})
@@ -127,17 +175,185 @@ func (s *Store) GetCrawlJobAndDocuments(ctx context.Context, id uuid.UUID) (db.J
 	return job, docs, nil
 }
 
-// ListPendingCrawlJobs returns up to `limit` crawl jobs that are still pending.
-func (s *Store) ListPendingCrawlJobs(ctx context.Context, limit int32) ([]db.Job, error) {
+// ListPendingJobs returns up to `limit` jobs that are still pending,
+// ordered by priority (desc) and created_at (asc).
+func (s *Store) ListPendingJobs(ctx context.Context, limit int32) ([]db.Job, error) {
 	var jobs []db.Job
 
 	err := s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
-		var err error
-		jobs, err = q.ListPendingCrawlJobs(ctx, limit)
-		return err
+		rows, err := q.ListPendingJobs(ctx, limit)
+		if err != nil {
+			return err
+		}
+
+		jobs = make([]db.Job, 0, len(rows))
+		for _, row := range rows {
+			jobs = append(jobs, db.Job{
+				ID:          row.ID,
+				Type:        row.Type,
+				Status:      row.Status,
+				Url:         row.Url,
+				Input:       row.Input,
+				Error:       row.Error,
+				CreatedAt:   row.CreatedAt,
+				UpdatedAt:   row.UpdatedAt,
+				CompletedAt: row.CompletedAt,
+				Priority:    row.Priority,
+				Sync:        row.Sync,
+				Output:      row.Output,
+			})
+		}
+		return nil
 	})
 
 	return jobs, err
+}
+
+// JobListFilter describes optional filters for listing jobs in admin APIs.
+type JobListFilter struct {
+	Type   string
+	Status string
+	Sync   *bool
+	Limit  int32
+	Offset int32
+}
+
+// ListJobs returns jobs matching the given filter, ordered by created_at desc.
+func (s *Store) ListJobs(ctx context.Context, filter JobListFilter) ([]db.Job, error) {
+	baseQuery := "SELECT id FROM jobs"
+	var conditions []string
+	var args []any
+	argPos := 1
+
+	if filter.Type != "" {
+		conditions = append(conditions, fmt.Sprintf("type = $%d", argPos))
+		args = append(args, filter.Type)
+		argPos++
+	}
+	if filter.Status != "" {
+		conditions = append(conditions, fmt.Sprintf("status = $%d", argPos))
+		args = append(args, filter.Status)
+		argPos++
+	}
+	if filter.Sync != nil {
+		conditions = append(conditions, fmt.Sprintf("sync = $%d", argPos))
+		args = append(args, *filter.Sync)
+		argPos++
+	}
+
+	if len(conditions) > 0 {
+		baseQuery = baseQuery + " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	baseQuery = baseQuery + " ORDER BY created_at DESC"
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	baseQuery = baseQuery + fmt.Sprintf(" LIMIT $%d", argPos)
+	args = append(args, limit)
+	argPos++
+
+	if filter.Offset > 0 {
+		baseQuery = baseQuery + fmt.Sprintf(" OFFSET $%d", argPos)
+		args = append(args, filter.Offset)
+	}
+
+	rows, err := s.DB.QueryContext(ctx, baseQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	jobs := make([]db.Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.GetJobByID(ctx, id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+
+	return jobs, nil
+}
+
+// GetJobByID fetches a single job row by its ID.
+func (s *Store) GetJobByID(ctx context.Context, id uuid.UUID) (db.Job, error) {
+	var job db.Job
+
+	err := s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
+		row, err := q.GetJobByID(ctx, id)
+		if err != nil {
+			return err
+		}
+
+		job = db.Job{
+			ID:          row.ID,
+			Type:        row.Type,
+			Status:      row.Status,
+			Url:         row.Url,
+			Input:       row.Input,
+			Error:       row.Error,
+			CreatedAt:   row.CreatedAt,
+			UpdatedAt:   row.UpdatedAt,
+			CompletedAt: row.CompletedAt,
+			Priority:    row.Priority,
+			Sync:        row.Sync,
+			Output:      row.Output,
+		}
+		return nil
+	})
+
+	return job, err
+}
+
+// SetJobOutput updates the output JSON for a job.
+func (s *Store) SetJobOutput(ctx context.Context, id uuid.UUID, output json.RawMessage) error {
+	return s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
+		return q.UpdateJobOutput(ctx, db.UpdateJobOutputParams{
+			ID: id,
+			Output: pqtype.NullRawMessage{
+				RawMessage: output,
+				Valid:      len(output) > 0,
+			},
+		})
+	})
+}
+
+// DeleteExpiredDocuments deletes documents older than the given cutoff timestamp.
+func (s *Store) DeleteExpiredDocuments(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM documents WHERE created_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows, nil
+}
+
+// DeleteExpiredJobsByType deletes jobs of the given type older than the cutoff.
+func (s *Store) DeleteExpiredJobsByType(ctx context.Context, jobType string, cutoff time.Time) (int64, error) {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM jobs WHERE type = $1 AND created_at < $2`, jobType, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows, nil
 }
 
 // GetAPIKeyByRawKey looks up an API key by its raw value.

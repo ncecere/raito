@@ -1,7 +1,17 @@
 package http
 
 import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"strconv"
+	"time"
+
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+
+	"raito/internal/config"
+	"raito/internal/db"
 	"raito/internal/store"
 )
 
@@ -15,9 +25,43 @@ type createAPIKeyResponse struct {
 	Key     string `json:"key"`
 }
 
+// AdminJob describes a single job row for admin inspection.
+type AdminJob struct {
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	Status      string          `json:"status"`
+	URL         string          `json:"url"`
+	Sync        bool            `json:"sync"`
+	Priority    int32           `json:"priority"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
+	CompletedAt *time.Time      `json:"completedAt,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Output      json.RawMessage `json:"output,omitempty"`
+}
+
+type adminJobResponse struct {
+	Success bool     `json:"success"`
+	Job     AdminJob `json:"job"`
+}
+
+type adminJobsResponse struct {
+	Success bool       `json:"success"`
+	Jobs    []AdminJob `json:"jobs"`
+}
+
+type adminRetentionResponse struct {
+	Success          bool             `json:"success"`
+	JobsDeleted      map[string]int64 `json:"jobsDeleted"`
+	DocumentsDeleted int64            `json:"documentsDeleted"`
+}
+
 // registerAdminRoutes registers admin-only endpoints under /admin.
 func registerAdminRoutes(group fiber.Router) {
 	group.Post("/api-keys", adminCreateAPIKeyHandler)
+	group.Get("/jobs/:id", adminGetJobHandler)
+	group.Get("/jobs", adminListJobsHandler)
+	group.Post("/retention/cleanup", adminRetentionCleanupHandler)
 }
 
 // adminCreateAPIKeyHandler creates a new user API key and returns the raw key once.
@@ -55,4 +99,174 @@ func adminCreateAPIKeyHandler(c *fiber.Ctx) error {
 		Success: true,
 		Key:     rawKey,
 	})
+}
+
+// adminRetentionCleanupHandler triggers a TTL cleanup run and returns
+// the number of jobs/documents deleted in this run.
+func adminRetentionCleanupHandler(c *fiber.Ctx) error {
+	cfg := c.Locals("config").(*config.Config)
+	st := c.Locals("store").(*store.Store)
+
+	if !cfg.Retention.Enabled {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Success: false,
+			Code:    "RETENTION_DISABLED",
+			Error:   "retention is disabled in server configuration",
+		})
+	}
+
+	stats := cleanupExpiredData(c.Context(), cfg, st)
+
+	return c.Status(fiber.StatusOK).JSON(adminRetentionResponse{
+		Success:          true,
+		JobsDeleted:      stats.JobsDeleted,
+		DocumentsDeleted: stats.DocumentsDeleted,
+	})
+}
+
+// adminGetJobHandler returns details for a single job by ID.
+func adminGetJobHandler(c *fiber.Ctx) error {
+	st := c.Locals("store").(*store.Store)
+
+	rawID := c.Params("id")
+	jobID, err := uuid.Parse(rawID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "invalid job id",
+		})
+	}
+
+	job, err := st.GetJobByID(c.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+				Success: false,
+				Code:    "NOT_FOUND",
+				Error:   "job not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+			Success: false,
+			Code:    "JOB_LOOKUP_FAILED",
+			Error:   err.Error(),
+		})
+	}
+
+	respJob := marshalAdminJob(job, true)
+
+	return c.Status(fiber.StatusOK).JSON(adminJobResponse{
+		Success: true,
+		Job:     respJob,
+	})
+}
+
+// adminListJobsHandler lists recent jobs with optional filters.
+func adminListJobsHandler(c *fiber.Ctx) error {
+	st := c.Locals("store").(*store.Store)
+
+	jobType := c.Query("type")
+	status := c.Query("status")
+
+	var syncFilter *bool
+	if syncStr := c.Query("sync"); syncStr != "" {
+		val, err := strconv.ParseBool(syncStr)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid sync value; expected true or false",
+			})
+		}
+		syncFilter = &val
+	}
+
+	limit := 50
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid limit value",
+			})
+		}
+		if n > 500 {
+			n = 500
+		}
+		limit = n
+	}
+
+	offset := 0
+	if v := c.Query("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid offset value",
+			})
+		}
+		offset = n
+	}
+
+	jobs, err := st.ListJobs(c.Context(), store.JobListFilter{
+		Type:   jobType,
+		Status: status,
+		Sync:   syncFilter,
+		Limit:  int32(limit),
+		Offset: int32(offset),
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+			Success: false,
+			Code:    "JOB_LIST_FAILED",
+			Error:   err.Error(),
+		})
+	}
+
+	out := make([]AdminJob, 0, len(jobs))
+	for _, job := range jobs {
+		out = append(out, marshalAdminJob(job, false))
+	}
+
+	return c.Status(fiber.StatusOK).JSON(adminJobsResponse{
+		Success: true,
+		Jobs:    out,
+	})
+}
+
+// marshalAdminJob converts a db.Job into an AdminJob. When includeOutput is false,
+// the output field is omitted to keep list responses lightweight.
+func marshalAdminJob(job db.Job, includeOutput bool) AdminJob {
+	var completedAt *time.Time
+	if job.CompletedAt.Valid {
+		t := job.CompletedAt.Time
+		completedAt = &t
+	}
+
+	var output json.RawMessage
+	if includeOutput && job.Output.Valid && len(job.Output.RawMessage) > 0 {
+		output = job.Output.RawMessage
+	}
+
+	var errMsg string
+	if job.Error.Valid {
+		errMsg = job.Error.String
+	}
+
+	return AdminJob{
+		ID:          job.ID.String(),
+		Type:        job.Type,
+		Status:      job.Status,
+		URL:         job.Url,
+		Sync:        job.Sync,
+		Priority:    job.Priority,
+		CreatedAt:   job.CreatedAt,
+		UpdatedAt:   job.UpdatedAt,
+		CompletedAt: completedAt,
+		Error:       errMsg,
+		Output:      output,
+	}
 }

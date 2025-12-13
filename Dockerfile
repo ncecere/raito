@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates chromium \
     && adduser -D -g '' raito
 
 WORKDIR /app

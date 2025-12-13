@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sqlc-dev/pqtype"
 )
 
 type ApiKey struct {
@@ -33,6 +34,7 @@ type Document struct {
 	Metadata   json.RawMessage
 	StatusCode sql.NullInt32
 	CreatedAt  time.Time
+	Engine     sql.NullString
 }
 
 type Job struct {
@@ -45,4 +47,7 @@ type Job struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	CompletedAt sql.NullTime
+	Priority    int32
+	Sync        bool
+	Output      pqtype.NullRawMessage
 }

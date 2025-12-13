@@ -24,13 +24,33 @@ Raito v1 supports rod-based scraping via the `useBrowser` flag on `/v1/scrape`. 
 
 These mirror the ideas in `PLAN.md` Phase 6 and include both v1 and v2 work.
 
-- `POST /v1/extract` endpoint (v1 scope):
+- `POST /v1/extract` endpoint (v1 scope) (DONE in v1):
   - Accepts URLs and a simple JSON schema or prompt.
   - Scrapes the URLs and calls a configured LLM provider to produce structured JSON.
   - Returns both raw documents and extracted fields for debugging.
-- Search + scrape (Firecrawl `search` analogue, v2+):
-  - Use a search API to find URLs for a query.
-  - Optionally map/crawl and scrape those URLs before returning results.
+
+## 3. Search & SearxNG Integration
+
+Raito can offer a Firecrawl-style `/v1/search` endpoint that discovers URLs via pluggable search providers (starting with SearxNG) and optionally scrapes the top results using the existing scraper.
+
+- Add `/v1/search` with a Firecrawl-compatible `SearchRequest`/`SearchData` shape (including `query`, `sources`, `categories`, `limit`, `tbs`, `location`, `timeout`, `ignoreInvalidURLs`, `scrapeOptions`, and `integration`), returning `web`/`news`/`images` arrays that can contain either plain search results or full `Document` objects.
+- Introduce an `internal/search` package with a provider interface and a concrete `SearxngProvider` that calls a configured SearxNG instance, mapping our `SearchRequest` into SearxNG's JSON API and results back into Firecrawl-style `SearchResult*` structures.
+- Support optional `scrapeOptions` on `/v1/search` that reuses the existing `internal/scraper` (and `useBrowser` when available) to scrape the top N results with bounded concurrency and per-request timeouts, merging documents into the `web`/`news`/`images` arrays.
+- Add configuration for search (enable/disable, provider name, SearxNG base URL, default/max results, timeouts, and max concurrent scrapes), plus basic logging and metrics for search requests and scraped result counts.
+
+## 4. Advanced Extract (Firecrawl-Style Async)
+
+Raito's `/v1/extract` can evolve into a Firecrawl-style async extract service that operates on multiple URLs at once, is schema-driven (plus prompt), and exposes job-oriented status and metadata.
+
+- Move to an async, job-based extract API (DONE in v1):
+  - Treat `POST /v1/extract` as a job-creation endpoint that immediately returns an `ExtractResponse` with `id`, `status`, and optional `warning`/`error`, and add `GET /v1/extract/:id` for polling job status/results, mirroring Firecrawl's `/v2/extract` semantics.
+- Make `urls` the primary input and drop `url`/`fields` entirely (PARTIAL – `urls` added, `url`/`fields` still supported for now):
+  - Redefine `ExtractRequest` around `urls: []string`, `prompt`, and `schema` (JSON schema-like object) plus Firecrawl-style flags like `ignoreInvalidURLs`, `enableWebSearch`, `allowExternalLinks`, `showSources`, `scrapeOptions`, and `integration`.
+- Use schema + prompt as the core contract:
+  - Focus extraction on a `schema` + `prompt` model instead of named fields, allowing nested JSON outputs and richer structures while keeping the endpoint simple to consume.
+- Reuse jobs/worker infrastructure and enrich metadata:
+  - Implement an `extract` job type backed by the existing `jobs`/`documents` tables, and extend extract responses with job metadata (`id`, `status`, `expiresAt`, `creditsUsed`, `sources`, per-URL errors) plus structured logging and metrics that capture provider/model usage and URLs processed.
+
 
 ## 3. Reliability, Roles & Concurrency
 
@@ -59,7 +79,7 @@ These expand on the reliability phase in `PLAN.md`.
 
 ## 6. Scrape Formats Parity (with Firecrawl)
 
-Raito currently returns markdown, HTML, raw HTML, and links in `/v1/scrape`. To more closely match Firecrawl's scrape formats, consider:
+Raito currently returns markdown, HTML, raw HTML, and links in `/v1/scrape` and per-page documents from `/v1/crawl`. To more closely match Firecrawl's scrape formats, consider:
 
 - **Summary format (`summary`)**
   - Add an optional `summary` field (or `formats` option) on `/v1/scrape` that produces a short natural-language summary of the page using the configured LLM provider.
@@ -80,3 +100,12 @@ Raito currently returns markdown, HTML, raw HTML, and links in `/v1/scrape`. To 
 - **Branding format (`branding`)**
   - Add a `branding` format that extracts brand identity and design system information (colors, typography, logo, tone of voice) using LLMs.
   - Return this as a structured JSON block alongside the main document.
+
+## 7. Batch Scrape & Bulk Operations
+
+Batch scraping is Firecrawl's way to process many independent URLs in a single async job; Raito can mirror this to make large, one-off or recurring scrapes more efficient than running many individual `/v1/scrape` calls.
+
+- Introduce a `/v1/batch/scrape` family of endpoints for starting, polling, cancelling, and inspecting batch jobs, modelled loosely on Firecrawl's `/v2/batch/scrape` (including `GET .../:id`, `DELETE .../:id`, and an `/errors` sub-resource).
+- Represent batch jobs using the existing `jobs`/`documents` tables with a dedicated `batch_scrape` job type and per-job progress (`completed`, `total`) so clients can monitor batch progress and paginate through results.
+- Support core batch options: a shared `options` block for scrape settings (formats, headers, actions, etc.), `maxConcurrency` per batch, `ignoreInvalidURLs`, basic `webhook` notifications, and `zeroDataRetention`/`integration` flags in line with other phases.
+- Optionally accept an idempotency key when creating batches so client libraries can safely retry batch-start calls without duplicating work.

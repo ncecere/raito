@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/redis/go-redis/v9 v9.17.2
+	github.com/sqlc-dev/pqtype v0.3.0
 	github.com/temoto/robotstxt v1.1.2
 	gopkg.in/yaml.v3 v3.0.1
 )

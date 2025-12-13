@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "data": {
+    "web": [
+      {
+        "title": "OpenAI",
+        "description": "We believe our research will eventually lead to artificial general intelligence, a system that can solve human-level problems. Building safe and beneficial ...",
+        "url": "https://openai.com/",
+        "metadata": {
+          "statusCode": 0
+        }
+      },
+      {
+        "title": "ChatGPT",
+        "description": "ChatGPT is your AI chatbot for everyday use. Chat with the most advanced AI to explore ideas, solve problems, and learn faster.",
+        "url": "https://chatgpt.com/",
+        "metadata": {
+          "statusCode": 0
+        }
+      },
+      {
+        "title": "OpenAI - Wikipedia",
+        "description": "OpenAI is an American artificial intelligence (AI) organization headquartered in San Francisco, California. It aims to develop \"safe and beneficial\" artificial ...",
+        "url": "https://en.wikipedia.org/wiki/OpenAI",
+        "metadata": {
+          "statusCode": 0
+        }
+      }
+    ]
+  }
+}
