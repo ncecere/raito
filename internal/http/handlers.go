@@ -558,6 +558,48 @@ func searchHandler(c *fiber.Ctx) error {
 		ignoreInvalid = *reqBody.IgnoreInvalidURLs
 	}
 
+	// For /v1/search, only a limited set of formats are supported
+	// when scrapeOptions are provided. Reject unsupported formats
+	// early so clients get a clear error instead of silently ignored
+	// options or unexpectedly large payloads.
+	if reqBody.ScrapeOptions != nil && len(reqBody.ScrapeOptions.Formats) > 0 {
+		allowed := map[string]struct{}{
+			"markdown": {},
+			"html":     {},
+			"rawhtml":  {},
+		}
+
+		for _, f := range reqBody.ScrapeOptions.Formats {
+			formatName := ""
+			switch v := f.(type) {
+			case string:
+				formatName = strings.ToLower(v)
+			case map[string]interface{}:
+				if t, ok := v["type"].(string); ok {
+					formatName = strings.ToLower(t)
+				}
+			default:
+				// Unknown format shape; treat as unsupported.
+			}
+
+			if formatName == "" {
+				return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+					Success: false,
+					Code:    "UNSUPPORTED_FORMAT",
+					Error:   "Unsupported format for /v1/search; allowed formats are: markdown, html, rawHtml",
+				})
+			}
+
+			if _, ok := allowed[formatName]; !ok {
+				return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+					Success: false,
+					Code:    "UNSUPPORTED_FORMAT",
+					Error:   fmt.Sprintf("Unsupported format %q for /v1/search; allowed formats are: markdown, html, rawHtml", formatName),
+				})
+			}
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(c.Context(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 
@@ -683,6 +725,23 @@ func searchHandler(c *fiber.Ctx) error {
 		providerName = "searxng"
 	}
 	metrics.RecordSearch(providerName, hasScrape, len(web), scrapedCount)
+
+	if loggerVal := c.Locals("logger"); loggerVal != nil {
+		if lg, ok := loggerVal.(interface{ Info(msg string, args ...any) }); ok {
+			attrs := []any{
+				"query", reqBody.Query,
+				"provider", providerName,
+				"sources", strings.Join(sources, ","),
+				"limit", limit,
+				"results", len(web),
+				"scraped_results", scrapedCount,
+				"invalid_url_results", invalidURLCount,
+				"scrape_error_results", scrapeErrorCount,
+				"ignore_invalid_urls", ignoreInvalid,
+			}
+			lg.Info("search_request", attrs...)
+		}
+	}
 
 	resp := SearchResponse{
 		Success: true,
@@ -850,24 +909,22 @@ func extractHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Require at least one URL (either url or urls)
+	// Require at least one URL via urls
 	urls := reqBody.URLs
-	if len(urls) == 0 && reqBody.URL != "" {
-		urls = []string{reqBody.URL}
-	}
 	if len(urls) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
 			Success: false,
 			Code:    "BAD_REQUEST",
-			Error:   "Missing required field 'urls' or 'url'",
+			Error:   "Missing required field 'urls'",
 		})
 	}
 
-	if len(reqBody.Fields) == 0 && len(reqBody.Schema) == 0 {
+	// Require a JSON schema; legacy fields mode is no longer supported.
+	if len(reqBody.Schema) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
 			Success: false,
 			Code:    "BAD_REQUEST",
-			Error:   "Missing required field 'fields' or 'schema'",
+			Error:   "Missing required field 'schema'",
 		})
 	}
 
@@ -891,6 +948,21 @@ func extractHandler(c *fiber.Ctx) error {
 			Code:    "EXTRACT_JOB_CREATE_FAILED",
 			Error:   err.Error(),
 		})
+	}
+
+	if loggerVal := c.Locals("logger"); loggerVal != nil {
+		if lg, ok := loggerVal.(interface{ Info(msg string, args ...any) }); ok {
+			attrs := []any{
+				"extract_id", id.String(),
+				"primary_url", primaryURL,
+				"urls_count", len(urls),
+				"provider", reqBody.Provider,
+				"model", reqBody.Model,
+				"ignore_invalid_urls", reqBody.IgnoreInvalidURLs,
+				"show_sources", reqBody.ShowSources,
+			}
+			lg.Info("extract_enqueued", attrs...)
+		}
 	}
 
 	protocol := c.Protocol()

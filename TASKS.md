@@ -126,19 +126,19 @@
 - [x] Implement an `internal/search` package with a provider interface and a concrete `SearxngProvider` that calls a configured SearxNG instance (JSON API), mapping Raito's `SearchRequest` into provider-specific query parameters and mapping results back into Firecrawl-style `SearchResult*` structures.
 - [x] Implement `POST /v1/search` using the configured provider to perform search-only requests (no scraping) with validation for `query`, `limit`, `timeout`, and basic error handling when search is disabled or misconfigured.
 - [x] Extend `/v1/search` to support `scrapeOptions` by reusing `internal/scraper` to scrape the top N web search results with request-scoped timeouts, merging scraped `Document` objects into the `data.web` array (v1 scrapes sequentially; concurrency controls are a possible future enhancement).
-- [ ] Define behavior for `ignoreInvalidURLs` during the scrape phase (e.g., whether to keep plain search results when scrapes fail vs dropping them) and consider how to surface partial-failure warnings beyond the current generic warning message.
-- [ ] Add structured logging and metrics for search requests (query, provider, sources, scraped count, errors) and expose basic counters/latencies alongside existing `/metrics` output.
+- [x] Define behavior for `ignoreInvalidURLs` during the scrape phase (e.g., whether to keep plain search results when scrapes fail vs dropping them) and consider how to surface partial-failure warnings beyond the current generic warning message.
+- [x] Add structured logging and metrics for search requests (query, provider, sources, scraped count, errors) and expose basic counters/latencies alongside existing `/metrics` output.
 
 ## Phase 13 – Extract++ (Firecrawl-Style Async)
 
-- [ ] Redesign `ExtractRequest` and `ExtractResponse` in `internal/http/types.go` to match Firecrawl-style extract:
-  - [ ] Make `urls: []string` the only URL field (remove `url`).
-  - [ ] Remove legacy `fields` mode from the public API.
-  - [ ] Add new request fields: `systemPrompt`, `ignoreInvalidURLs`, `enableWebSearch`, `allowExternalLinks`, `showSources`, `scrapeOptions`, and `integration`.
-  - [ ] Extend `ExtractStatusResponse` to include additional metadata (e.g. `expiresAt`, `sources`, per-URL errors).
-  - [ ] Update worker and handlers to use the new shapes end-to-end and adjust validation accordingly.
+- [x] Redesign `ExtractRequest` and `ExtractResponse` in `internal/http/types.go` to match Firecrawl-style extract:
+  - [x] Make `urls: []string` the only URL field (remove `url`).
+  - [x] Remove legacy `fields` mode from the public API.
+  - [x] Add new request fields: `systemPrompt`, `ignoreInvalidURLs`, `enableWebSearch`, `allowExternalLinks`, `showSources`, `scrapeOptions`, and `integration`.
+  - [x] Extend `ExtractStatusResponse` to include additional metadata (e.g. `expiresAt`, `sources`, per-URL errors).
+  - [x] Update worker and handlers to use the new shapes end-to-end and adjust validation accordingly.
 - [x] Convert `/v1/extract` into an async, job-based endpoint that immediately enqueues an `extract` job using the existing `jobs`/worker infrastructure (storing URLs, schema, prompts, provider/model, and options in `jobs.input`) and returns an initial `ExtractResponse` with `id`, `status`, and any immediate validation errors.
 - [x] Add `GET /v1/extract/:id` (and optionally a lightweight polling helper if needed) that returns Firecrawl-like job metadata (`id`, `status`, `data`, `error`, `warning`, `expiresAt`, `creditsUsed`, `sources`) so clients can track progress and retrieve results once extraction completes.
 - [x] Implement schema-driven extraction in the LLM layer by adjusting prompt construction and response parsing so the LLM returns JSON that matches the provided schema, including support for nested objects, and mapping that into the `data` field of `ExtractResponse`.
-- [ ] Define clear semantics for `ignoreInvalidURLs`, `enableWebSearch`, and `allowExternalLinks` on extract requests, including how they interact with search/crawl under the hood in future phases, and ensure multi-URL jobs handle per-URL failures without aborting the entire job when appropriate.
-- [ ] Expand extract-related logging and metrics (beyond `metrics.RecordLLMExtract`) to cover async jobs: track extract request/job counts, per-provider/model success/failure, URLs/documents processed per job, partial failures, and latency, and expose these via `/metrics` alongside existing scrape/crawl metrics.
+- [ ] (Future) Define clear semantics for `ignoreInvalidURLs`, `enableWebSearch`, and `allowExternalLinks` on extract requests, including how they interact with search/crawl under the hood in future phases, and ensure multi-URL jobs handle per-URL failures without aborting the entire job when appropriate.
+- [x] Expand extract-related logging and metrics (beyond `metrics.RecordLLMExtract`) to cover async jobs: track extract request/job counts, per-provider/model success/failure, URLs/documents processed per job, partial failures, and latency, and expose these via `/metrics` alongside existing scrape/crawl metrics.

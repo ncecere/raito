@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync/atomic"
+
 	"time"
 
 	"github.com/google/uuid"
@@ -197,13 +197,14 @@ func StartCrawlWorker(ctx context.Context, cfg *config.Config, st *store.Store) 
 							return
 						}
 
-						if req.URL == "" {
-							req.URL = job.Url
+						if len(req.URLs) == 0 && job.Url != "" {
+							req.URLs = []string{job.Url}
 						}
 
 						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "running", nil)
 
 						runExtractJob(ctx, cfg, st, job.ID, req)
+
 					case "batch_scrape":
 						var req BatchScrapeRequest
 						if err := json.Unmarshal(job.Input, &req); err != nil {
@@ -629,65 +630,115 @@ func runMapJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID u
 // runExtractJob performs a multi-URL extract for an extract job and
 // stores the resulting JSON object into the job's output field.
 func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID uuid.UUID, req ExtractRequest) {
-	// Determine URLs: prefer req.URLs, fall back to single URL if present.
 	urls := req.URLs
-	if len(urls) == 0 && req.URL != "" {
-		urls = []string{req.URL}
-	}
 	if len(urls) == 0 {
 		msg := "EXTRACT_FAILED: no urls provided for extract job"
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 		return
 	}
 
-	// Use the scraper timeout for both scraping and LLM operations.
-	timeoutMs := cfg.Scraper.TimeoutMs
-
-	// Scrape all URLs using the HTTP scraper (no browser for extract).
-	s := scraper.NewHTTPScraper(time.Duration(timeoutMs) * time.Millisecond)
-
-	scrapeCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
-	defer cancel()
-
-	var combinedMarkdown strings.Builder
-	for i, u := range urls {
-		res, err := s.Scrape(scrapeCtx, scraper.Request{
-			URL:       u,
-			Headers:   map[string]string{},
-			Timeout:   time.Duration(timeoutMs) * time.Millisecond,
-			UserAgent: cfg.Scraper.UserAgent,
-		})
-		if err != nil {
-			msg := "SCRAPE_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
-			return
-		}
-
-		if i > 0 {
-			combinedMarkdown.WriteString("\n\n---\n\n")
-		}
-		combinedMarkdown.WriteString(fmt.Sprintf("URL: %s\n\n", u))
-		combinedMarkdown.WriteString(res.Markdown)
+	if len(req.Schema) == 0 {
+		msg := "EXTRACT_FAILED: no schema provided for extract job"
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		return
 	}
 
-	markdown := combinedMarkdown.String()
+	// Use the scraper timeout for both scraping and LLM operations.
+	timeoutMs := cfg.Scraper.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+
+	ignoreInvalid := false
+	if req.IgnoreInvalidURLs != nil {
+		ignoreInvalid = *req.IgnoreInvalidURLs
+	}
+
+	showSources := false
+	if req.ShowSources != nil {
+		showSources = *req.ShowSources
+	}
+
+	// Prepare HTTP scraper (no browser for extract).
+	s := scraper.NewHTTPScraper(time.Duration(timeoutMs) * time.Millisecond)
 
 	// Prepare LLM client.
 	client, provider, modelName, err := llm.NewClientFromConfig(cfg, req.Provider, req.Model)
 	if err != nil {
+		metrics.RecordExtractJob("", "", "failed")
 		msg := "LLM_NOT_CONFIGURED: " + err.Error()
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 		return
 	}
 
 	llmTimeout := time.Duration(timeoutMs) * time.Millisecond
-	llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
-	defer llmCancel()
 
-	var filtered map[string]interface{}
+	// Build a combined prompt including an optional system prompt.
+	buildPrompt := func(userPrompt string) string {
+		if req.SystemPrompt == "" {
+			return userPrompt
+		}
+		if userPrompt == "" {
+			return req.SystemPrompt
+		}
+		return req.SystemPrompt + "\n\n" + userPrompt
+	}
 
-	if len(req.Schema) > 0 {
-		// Firecrawl-style JSON mode using a JSON Schema.
+	results := make([]map[string]interface{}, 0, len(urls))
+	sources := make([]map[string]interface{}, 0, len(urls))
+	var successCount int
+
+	// Derive shared scrape headers from scrapeOptions when provided.
+	baseHeaders := map[string]string{}
+	if req.ScrapeOptions != nil {
+		for k, v := range req.ScrapeOptions.Headers {
+			baseHeaders[k] = v
+		}
+		if req.ScrapeOptions.Location != nil {
+			loc := req.ScrapeOptions.Location
+			if len(loc.Languages) > 0 {
+				baseHeaders["Accept-Language"] = strings.Join(loc.Languages, ",")
+			} else if loc.Country != "" {
+				baseHeaders["Accept-Language"] = loc.Country
+			}
+		}
+	}
+
+	for _, u := range urls {
+		// Scrape the URL first.
+		headers := map[string]string{}
+		for k, v := range baseHeaders {
+			headers[k] = v
+		}
+
+		res, err := s.Scrape(ctx, scraper.Request{
+			URL:       u,
+			Headers:   headers,
+			Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+			UserAgent: cfg.Scraper.UserAgent,
+		})
+		if err != nil {
+			if ignoreInvalid {
+				results = append(results, map[string]interface{}{
+					"url":     u,
+					"success": false,
+					"error":   "SCRAPE_FAILED: " + err.Error(),
+				})
+				if showSources {
+					sources = append(sources, map[string]interface{}{
+						"url":        u,
+						"statusCode": 0,
+						"error":      err.Error(),
+					})
+				}
+				continue
+			}
+			msg := "SCRAPE_FAILED: " + err.Error()
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			return
+		}
+
+		// Firecrawl-style JSON mode using a JSON Schema, one LLM call per URL.
 		desc := "Arbitrary JSON object extracted from the page content."
 		if schemaBytes, err := json.Marshal(req.Schema); err == nil {
 			desc = desc + " Schema: " + string(schemaBytes)
@@ -699,104 +750,125 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 			Type:        "object",
 		}}
 
+		llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
 		llmRes, err := client.ExtractFields(llmCtx, llm.ExtractRequest{
-			URL:      urls[0],
-			Markdown: markdown,
+			URL:      u,
+			Markdown: res.Markdown,
 			Fields:   fieldSpecs,
-			Prompt:   req.Prompt,
+			Prompt:   buildPrompt(req.Prompt),
 			Timeout:  llmTimeout,
 			Strict:   false,
 		})
+		llmCancel()
 		if err != nil {
-			statusCode := "EXTRACT_FAILED"
 			metrics.RecordLLMExtract(string(provider), modelName, false)
-			msg := statusCode + ": " + err.Error()
+			if ignoreInvalid {
+				results = append(results, map[string]interface{}{
+					"url":     u,
+					"success": false,
+					"error":   "EXTRACT_FAILED: " + err.Error(),
+				})
+				if showSources {
+					sources = append(sources, map[string]interface{}{
+						"url":        u,
+						"statusCode": res.Status,
+						"error":      err.Error(),
+					})
+				}
+				continue
+			}
+
+			msg := "EXTRACT_FAILED: " + err.Error()
 			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 			return
 		}
 
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
-		// Prefer the "json" field when present, otherwise fall back to
-		// the full fields map so we still return useful data when the
-		// model omits the outer "json" key.
+		var jsonValue map[string]interface{}
 		if v, ok := llmRes.Fields["json"]; ok {
 			if m, ok := v.(map[string]interface{}); ok {
-				filtered = m
+				jsonValue = m
 			} else {
-				filtered = map[string]interface{}{"_value": v}
+				jsonValue = map[string]interface{}{"_value": v}
 			}
 		} else if len(llmRes.Fields) > 0 {
-			filtered = llmRes.Fields
+			// Fallback: ensure we still return something useful.
+			jsonValue = llmRes.Fields
 		}
-	} else {
-		// Legacy field-based extract mode.
-		fieldSpecs := make([]llm.FieldSpec, 0, len(req.Fields))
-		for _, f := range req.Fields {
-			fieldSpecs = append(fieldSpecs, llm.FieldSpec{
-				Name:        f.Name,
-				Description: f.Description,
-				Type:        f.Type,
+
+		if jsonValue == nil || len(jsonValue) == 0 {
+			if ignoreInvalid {
+				results = append(results, map[string]interface{}{
+					"url":     u,
+					"success": false,
+					"error":   "EXTRACT_EMPTY_RESULT: LLM did not return any fields",
+				})
+				if showSources {
+					sources = append(sources, map[string]interface{}{
+						"url":        u,
+						"statusCode": res.Status,
+						"error":      "LLM empty result",
+					})
+				}
+				continue
+			}
+			msg := "EXTRACT_EMPTY_RESULT: LLM did not return any fields"
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			return
+		}
+
+		results = append(results, map[string]interface{}{
+			"url":     u,
+			"success": true,
+			"json":    jsonValue,
+		})
+		if showSources {
+			sources = append(sources, map[string]interface{}{
+				"url":        u,
+				"statusCode": res.Status,
+				"error":      "",
 			})
 		}
-
-		llmRes, err := client.ExtractFields(llmCtx, llm.ExtractRequest{
-			URL:      urls[0],
-			Markdown: markdown,
-			Fields:   fieldSpecs,
-			Prompt:   req.Prompt,
-			Timeout:  llmTimeout,
-			Strict:   req.Strict,
-		})
-		if err != nil {
-			statusCode := "EXTRACT_FAILED"
-			metrics.RecordLLMExtract(string(provider), modelName, false)
-			msg := statusCode + ": " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
-			return
-		}
-
-		metrics.RecordLLMExtract(string(provider), modelName, true)
-
-		// Filter fields to only those requested by name.
-		requested := make(map[string]struct{}, len(req.Fields))
-		for _, f := range req.Fields {
-			requested[f.Name] = struct{}{}
-		}
-
-		filtered = make(map[string]interface{}, len(requested))
-		for k, v := range llmRes.Fields {
-			if _, ok := requested[k]; ok {
-				filtered[k] = v
-			}
-		}
-
-		if req.Strict && len(filtered) != len(requested) {
-			msg := "EXTRACT_INCOMPLETE_FIELDS: LLM did not return all requested fields"
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
-			return
-		}
+		successCount++
 	}
 
-	if filtered == nil || len(filtered) == 0 {
-		msg := "EXTRACT_EMPTY_RESULT: LLM did not return any fields"
+	if successCount == 0 {
+		metrics.RecordExtractJob(string(provider), modelName, "failed")
+		if len(results) > 0 {
+			metrics.RecordExtractResults(string(provider), 0, len(results))
+		}
+		msg := "EXTRACT_EMPTY_RESULT: no URLs produced extracted JSON"
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 		return
 	}
 
-	// Persist only the structured JSON object (filtered) into job output.
-	output, err := json.Marshal(filtered)
+	payload := map[string]interface{}{
+		"results": results,
+	}
+	if showSources && len(sources) > 0 {
+		payload["sources"] = sources
+	}
+
+	output, err := json.Marshal(payload)
 	if err != nil {
+		metrics.RecordExtractJob(string(provider), modelName, "failed")
+		metrics.RecordExtractResults(string(provider), successCount, len(results)-successCount)
 		msg := "EXTRACT_FAILED: failed to marshal extract result: " + err.Error()
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 		return
 	}
 
 	if err := st.SetJobOutput(context.Background(), jobID, output); err != nil {
-		msg := "EXTRACT_FAILED: failed to persist job output: " + err.Error()
+		metrics.RecordExtractJob(string(provider), modelName, "failed")
+		metrics.RecordExtractResults(string(provider), successCount, len(results)-successCount)
+		msg := "EXTRACT_FAILED: failed to persist extract result: " + err.Error()
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
 		return
 	}
+
+	metrics.RecordExtractJob(string(provider), modelName, "completed")
+	metrics.RecordExtractResults(string(provider), successCount, len(results)-successCount)
 
 	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "completed", nil)
 }

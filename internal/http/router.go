@@ -45,6 +45,9 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 			reqID = uuid.New().String()
 		}
 		c.Locals("request_id", reqID)
+		if logger != nil {
+			c.Locals("logger", logger)
+		}
 
 		err := c.Next()
 

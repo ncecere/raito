@@ -23,6 +23,9 @@ var (
 	searchRequestsTotal       = make(map[searchKey]int64)
 	searchResultsTotal        = make(map[string]int64)
 	searchScrapedResultsTotal = make(map[string]int64)
+
+	extractJobsTotal    = make(map[extractJobKey]int64)
+	extractResultsTotal = make(map[extractResultKey]int64)
 )
 
 type reqKey struct {
@@ -45,6 +48,17 @@ type llmKey struct {
 type searchKey struct {
 	Provider string
 	Scrape   string
+}
+
+type extractJobKey struct {
+	Provider string
+	Model    string
+	Status   string
+}
+
+type extractResultKey struct {
+	Provider string
+	Outcome  string
 }
 
 // RecordRequest increments request counter and records latency.
@@ -115,6 +129,35 @@ func RecordSearch(provider string, withScrape bool, results int, scraped int) {
 	}
 	if scraped > 0 {
 		searchScrapedResultsTotal[provider] += int64(scraped)
+	}
+}
+
+// RecordExtractJob increments counters for extract jobs keyed by
+// provider, model, and status (e.g., completed/failed).
+func RecordExtractJob(provider, model, status string) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	key := extractJobKey{Provider: provider, Model: model, Status: status}
+	extractJobsTotal[key]++
+}
+
+// RecordExtractResults increments counters for extracted results by
+// provider and outcome (success or failed).
+func RecordExtractResults(provider string, success, failed int) {
+	if success <= 0 && failed <= 0 {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if success > 0 {
+		key := extractResultKey{Provider: provider, Outcome: "success"}
+		extractResultsTotal[key] += int64(success)
+	}
+	if failed > 0 {
+		key := extractResultKey{Provider: provider, Outcome: "failed"}
+		extractResultsTotal[key] += int64(failed)
 	}
 }
 
@@ -243,6 +286,50 @@ func Export() string {
 	for _, p := range scrapedProviders {
 		v := searchScrapedResultsTotal[p]
 		fmt.Fprintf(&b, "raito_search_scraped_results_total{provider=\"%s\"} %d\n", p, v)
+	}
+
+	// Extract metrics
+	b.WriteString("# HELP raito_extract_jobs_total Total extract jobs by provider, model, and status\n")
+	b.WriteString("# TYPE raito_extract_jobs_total counter\n")
+
+	var extractJobKeys []extractJobKey
+	for k := range extractJobsTotal {
+		extractJobKeys = append(extractJobKeys, k)
+	}
+	sort.Slice(extractJobKeys, func(i, j int) bool {
+		if extractJobKeys[i].Provider != extractJobKeys[j].Provider {
+			return extractJobKeys[i].Provider < extractJobKeys[j].Provider
+		}
+		if extractJobKeys[i].Model != extractJobKeys[j].Model {
+			return extractJobKeys[i].Model < extractJobKeys[j].Model
+		}
+		return extractJobKeys[i].Status < extractJobKeys[j].Status
+	})
+
+	for _, k := range extractJobKeys {
+		v := extractJobsTotal[k]
+		fmt.Fprintf(&b, "raito_extract_jobs_total{provider=\"%s\",model=\"%s\",status=\"%s\"} %d\n",
+			k.Provider, k.Model, k.Status, v)
+	}
+
+	b.WriteString("# HELP raito_extract_results_total Total extract results by provider and outcome\n")
+	b.WriteString("# TYPE raito_extract_results_total counter\n")
+
+	var extractResultKeys []extractResultKey
+	for k := range extractResultsTotal {
+		extractResultKeys = append(extractResultKeys, k)
+	}
+	sort.Slice(extractResultKeys, func(i, j int) bool {
+		if extractResultKeys[i].Provider != extractResultKeys[j].Provider {
+			return extractResultKeys[i].Provider < extractResultKeys[j].Provider
+		}
+		return extractResultKeys[i].Outcome < extractResultKeys[j].Outcome
+	})
+
+	for _, k := range extractResultKeys {
+		v := extractResultsTotal[k]
+		fmt.Fprintf(&b, "raito_extract_results_total{provider=\"%s\",outcome=\"%s\"} %d\n",
+			k.Provider, k.Outcome, v)
 	}
 
 	// Retention metrics

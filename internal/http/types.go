@@ -156,22 +156,25 @@ type ExtractField struct {
 }
 
 // ExtractRequest defines the payload for POST /v1/extract.
-// v1 focuses on a single URL plus a set of fields. Provider/model
+// v2 focuses on a list of URLs plus a JSON schema. Provider/model
 // are optional and fall back to server configuration.
 //
-// When Schema is provided, Raito uses a Firecrawl-style JSON mode
-// where the LLM returns a structured JSON object matching the schema.
-// When Fields are provided without Schema, Raito uses a simpler
-// field-based extraction mode that returns a flat map of field values.
+// Legacy `url` and `fields` modes have been removed from the public
+// API; requests must provide `urls` and a `schema`.
 type ExtractRequest struct {
-	URLs     []string               `json:"urls,omitempty"`
-	URL      string                 `json:"url,omitempty"`
-	Fields   []ExtractField         `json:"fields,omitempty"`
-	Schema   map[string]interface{} `json:"schema,omitempty"`
-	Prompt   string                 `json:"prompt,omitempty"`
-	Provider string                 `json:"provider,omitempty"` // openai, anthropic, google
-	Model    string                 `json:"model,omitempty"`
-	Strict   bool                   `json:"strict,omitempty"`
+	URLs               []string               `json:"urls"`
+	Schema             map[string]interface{} `json:"schema,omitempty"`
+	Prompt             string                 `json:"prompt,omitempty"`
+	SystemPrompt       string                 `json:"systemPrompt,omitempty"`
+	Provider           string                 `json:"provider,omitempty"` // openai, anthropic, google
+	Model              string                 `json:"model,omitempty"`
+	Strict             bool                   `json:"strict,omitempty"`
+	IgnoreInvalidURLs  *bool                  `json:"ignoreInvalidURLs,omitempty"`
+	EnableWebSearch    *bool                  `json:"enableWebSearch,omitempty"`
+	AllowExternalLinks *bool                  `json:"allowExternalLinks,omitempty"`
+	ShowSources        *bool                  `json:"showSources,omitempty"`
+	ScrapeOptions      *ScrapeOptions         `json:"scrapeOptions,omitempty"`
+	Integration        string                 `json:"integration,omitempty"`
 }
 
 type ExtractResult struct {

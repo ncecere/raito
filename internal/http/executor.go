@@ -298,7 +298,12 @@ func (e *JobQueueExecutor) Extract(ctx context.Context, req *ExtractRequest) (*E
 		return uuid.New()
 	}()
 
-	if _, err := e.st.CreateJob(waitCtx, jobID, "extract", req.URL, req, true, 100); err != nil {
+	primaryURL := ""
+	if len(req.URLs) > 0 {
+		primaryURL = req.URLs[0]
+	}
+
+	if _, err := e.st.CreateJob(waitCtx, jobID, "extract", primaryURL, req, true, 100); err != nil {
 		return nil, err
 	}
 
