@@ -1,0 +1,15 @@
+# Minimal SearxNG override for Raito local dev.
+# Uses built-in defaults but enables JSON output.
+
+use_default_settings: true
+
+server:
+  # Non-default secret to satisfy runtime checks; fine for local dev.
+  secret_key: "change_me_for_dev"
+
+search:
+  # Allow JSON output alongside HTML so Raito can
+  # consume the search API with format=json.
+  formats:
+    - html
+    - json

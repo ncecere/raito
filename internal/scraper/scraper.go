@@ -21,16 +21,24 @@ type Request struct {
 	UserAgent string
 }
 
+// LinkMetadata captures additional information about an outbound link discovered during scraping.
+type LinkMetadata struct {
+	URL  string
+	Text string
+	Rel  string
+}
+
 // Result represents the core scrape output independent of the HTTP layer.
 type Result struct {
-	URL      string
-	Markdown string
-	HTML     string
-	RawHTML  string
-	Links    []string
-	Metadata map[string]interface{}
-	Status   int
-	Engine   string
+	URL          string
+	Markdown     string
+	HTML         string
+	RawHTML      string
+	Links        []string
+	LinkMetadata []LinkMetadata
+	Metadata     map[string]any
+	Status       int
+	Engine       string
 }
 
 // Scraper defines the interface for URL scrapers.
@@ -101,15 +109,16 @@ func (s *HTTPScraper) Scrape(ctx context.Context, req Request) (*Result, error) 
 			RawHTML:  htmlStr,
 			Status:   resp.StatusCode,
 			Engine:   "http",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"statusCode": resp.StatusCode,
 				"sourceURL":  u.String(),
 			},
 		}, nil
 	}
 
-	// Extract links and fallback plain-text markdown if converter failed
+	// Extract links (with basic metadata) and fallback plain-text markdown if converter failed
 	links := make([]string, 0)
+	linkMeta := make([]LinkMetadata, 0)
 	doc.Find("a[href]").Each(func(_ int, sel *goquery.Selection) {
 		if href, ok := sel.Attr("href"); ok {
 			href = strings.TrimSpace(href)
@@ -127,7 +136,16 @@ func (s *HTTPScraper) Scrape(ctx context.Context, req Request) (*Result, error) 
 				return
 			}
 			linkURL.Fragment = ""
-			links = append(links, linkURL.String())
+			finalURL := linkURL.String()
+			links = append(links, finalURL)
+
+			text := strings.TrimSpace(sel.Text())
+			rel := strings.TrimSpace(sel.AttrOr("rel", ""))
+			linkMeta = append(linkMeta, LinkMetadata{
+				URL:  finalURL,
+				Text: text,
+				Rel:  rel,
+			})
 		}
 	})
 
@@ -160,7 +178,7 @@ func (s *HTTPScraper) Scrape(ctx context.Context, req Request) (*Result, error) 
 		}
 	}
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":         title,
 		"description":   desc,
 		"language":      lang,
@@ -176,13 +194,93 @@ func (s *HTTPScraper) Scrape(ctx context.Context, req Request) (*Result, error) 
 	}
 
 	return &Result{
-		URL:      u.String(),
-		Markdown: markdown,
-		HTML:     htmlStr,
-		RawHTML:  htmlStr,
-		Links:    links,
-		Metadata: metadata,
-		Status:   resp.StatusCode,
-		Engine:   "http",
+		URL:          u.String(),
+		Markdown:     markdown,
+		HTML:         htmlStr,
+		RawHTML:      htmlStr,
+		Links:        links,
+		LinkMetadata: linkMeta,
+		Metadata:     metadata,
+		Status:       resp.StatusCode,
+		Engine:       "http",
 	}, nil
+}
+
+// ExtractImages parses the given HTML string and extracts absolute HTTP(S) image URLs.
+// It is a helper used by HTTP handlers to populate Document.Images for both scrape and crawl.
+func ExtractImages(htmlStr, baseURL string) []string {
+	if htmlStr == "" {
+		return nil
+	}
+
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		u = nil
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlStr))
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	images := make([]string, 0)
+
+	resolve := func(src string) string {
+		src = strings.TrimSpace(src)
+		if src == "" {
+			return ""
+		}
+		imgURL, err := url.Parse(src)
+		if err != nil {
+			return ""
+		}
+		if u != nil && !imgURL.IsAbs() {
+			imgURL = u.ResolveReference(imgURL)
+		}
+		if imgURL.Scheme != "http" && imgURL.Scheme != "https" {
+			return ""
+		}
+		imgURL.Fragment = ""
+		return imgURL.String()
+	}
+
+	// <img src="...">
+	doc.Find("img[src]").Each(func(_ int, sel *goquery.Selection) {
+		src := sel.AttrOr("src", "")
+		if urlStr := resolve(src); urlStr != "" {
+			if _, exists := seen[urlStr]; !exists {
+				seen[urlStr] = struct{}{}
+				images = append(images, urlStr)
+			}
+		}
+	})
+
+	// <source srcset="..."> (take the first candidate)
+	doc.Find("source[srcset]").Each(func(_ int, sel *goquery.Selection) {
+		srcset := strings.TrimSpace(sel.AttrOr("srcset", ""))
+		if srcset == "" {
+			return
+		}
+		// srcset can be "url1 1x, url2 2x"; take the first URL token
+		parts := strings.Split(srcset, ",")
+		if len(parts) == 0 {
+			return
+		}
+		first := strings.Fields(strings.TrimSpace(parts[0]))
+		if len(first) == 0 {
+			return
+		}
+		if urlStr := resolve(first[0]); urlStr != "" {
+			if _, exists := seen[urlStr]; !exists {
+				seen[urlStr] = struct{}{}
+				images = append(images, urlStr)
+			}
+		}
+	})
+
+	if len(images) == 0 {
+		return nil
+	}
+	return images
 }

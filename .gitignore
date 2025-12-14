@@ -31,4 +31,4 @@ coverage*
 .env.*
 
 # Local config (contains secrets)
-config/config.yaml
+deploy/config/config.yaml

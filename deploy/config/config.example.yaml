@@ -1,0 +1,75 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+scraper:
+  userAgent: "RaitoBot/1.0"
+  timeoutMs: 30000
+  linksSameDomainOnly: false   # when true, only include links on the same host as the scraped URL
+  linksMaxPerDocument: 0       # 0 means no explicit limit on links per document
+
+crawler:
+  maxDepthDefault: 3
+  maxPagesDefault: 100
+
+robots:
+  respect: true
+
+rod:
+  enabled: true
+
+database:
+  dsn: "postgres://raito:raito@localhost:5432/raito?sslmode=disable"
+
+redis:
+  url: "redis://localhost:6379"
+
+auth:
+  enabled: true
+  initialAdminKey: "change_me_admin_key"
+
+ratelimit:
+  defaultPerMinute: 60
+
+worker:
+  maxConcurrentJobs: 4
+  pollIntervalMs: 2000
+  maxConcurrentURLsPerJob: 1
+  syncJobWaitTimeoutMs: 60000     # max time (ms) API waits for sync jobs
+
+search:
+  enabled: true
+  provider: "searxng"           # currently only "searxng" is supported
+  maxResults: 5                  # hard upper bound for /v1/search results
+  timeoutMs: 60000               # overall timeout for search + scraping
+  maxConcurrentScrapes: 4        # future use; currently scrapes sequentially
+  searxng:
+    baseURL: "http://searxng:8080" # example SearxNG endpoint with JSON API enabled
+    defaultLimit: 5               # default result limit when not specified
+    timeoutMs: 10000              # per-request provider timeout
+
+retention:
+  enabled: true
+  cleanupIntervalMinutes: 60   # how often the worker runs TTL cleanup
+  jobs:
+    defaultDays: 14            # fallback TTL for job types without an override
+    scrapeDays: 7              # optional: TTL for scrape jobs
+    mapDays: 7                 # optional: TTL for map jobs
+    extractDays: 30            # optional: TTL for extract jobs
+    crawlDays: 30              # optional: TTL for crawl jobs
+  documents:
+    defaultDays: 30            # TTL for crawl documents
+
+llm:
+
+  defaultProvider: "openai" # or anthropic, google
+  openai:
+    apiKey: "${OPENAI_API_KEY}"                 # set via env or secrets in prod
+    baseURL: "https://api.openai.com/v1"        # override for OpenAI-compatible APIs
+    model: "gpt-4.1-mini"
+  anthropic:
+    apiKey: "${ANTHROPIC_API_KEY}"
+    model: "claude-3-5-sonnet-20241022"
+  google:
+    apiKey: "${GOOGLE_API_KEY}"
+    model: "gemini-1.5-flash"

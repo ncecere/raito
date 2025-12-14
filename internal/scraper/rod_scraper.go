@@ -9,18 +9,22 @@ import (
 	htmlmd "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 )
 
 // RodScraper uses a real browser (via rod) to render JS-heavy pages
-// before extracting HTML, markdown, links, and metadata.
+// before extracting HTML, markdown, links, and metadata. It always
+// manages a local headless Chromium instance in-process; external
+// browser pool support has been removed for now to simplify deployment.
 type RodScraper struct {
-	BrowserURL string
-	Timeout    time.Duration
+	Timeout time.Duration
 }
 
-func NewRodScraper(browserURL string, timeout time.Duration) *RodScraper {
-	return &RodScraper{BrowserURL: browserURL, Timeout: timeout}
+// NewRodScraper creates a RodScraper that launches a local headless
+// Chromium instance for each scrape.
+func NewRodScraper(timeout time.Duration) *RodScraper {
+	return &RodScraper{Timeout: timeout}
 }
 
 func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
@@ -32,22 +36,17 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 		u.Scheme = "http"
 	}
 
-	// Prepare browser with context and timeout
-	browser := rod.New().Context(ctx).Timeout(r.Timeout)
-	if r.BrowserURL != "" {
-		browser = browser.ControlURL(r.BrowserURL)
-	}
-
-	if err := browser.Connect(); err != nil {
+	browser, err := newLocalRodBrowser(ctx, r.Timeout)
+	if err != nil {
 		return nil, err
 	}
-	defer browser.MustClose()
+	defer func() { _ = browser.Close() }()
 
 	page, err := browser.Page(proto.TargetCreateTarget{URL: u.String()})
 	if err != nil {
 		return nil, err
 	}
-	defer page.MustClose()
+	defer func() { _ = page.Close() }()
 
 	if err := page.WaitLoad(); err != nil {
 		return nil, err
@@ -75,14 +74,14 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 			RawHTML:  htmlStr,
 			Status:   200,
 			Engine:   "browser",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"statusCode": 200,
 				"sourceURL":  u.String(),
 			},
 		}, nil
 	}
 
-	// Extract links
+	// Extract links (URLs only; link metadata is handled by HTTPScraper for now)
 	links := make([]string, 0)
 	doc.Find("a[href]").Each(func(_ int, sel *goquery.Selection) {
 		if href, ok := sel.Attr("href"); ok {
@@ -110,7 +109,8 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 		markdown = doc.Text()
 	}
 
-	// Build richer metadata (same as HTTPScraper)
+	// Build richer metadata (aligned with HTTPScraper, but statusCode is 200
+	// because we are operating via the browser rather than an HTTP client).
 	title := strings.TrimSpace(doc.Find("title").First().Text())
 	desc := doc.Find("meta[name=description]").AttrOr("content", "")
 	keywords := doc.Find("meta[name=keywords]").AttrOr("content", "")
@@ -134,7 +134,7 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":         title,
 		"description":   desc,
 		"language":      lang,
@@ -159,4 +159,68 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 		Status:   200,
 		Engine:   "browser",
 	}, nil
+}
+
+// CaptureScreenshot opens a browser page with rod and returns a screenshot
+// of the given URL as raw image bytes. It always uses a local headless
+// browser instance and is intended for use by the HTTP layer when the
+// `screenshot` format is requested.
+func CaptureScreenshot(ctx context.Context, targetURL string, timeout time.Duration, fullPage bool) ([]byte, error) {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" {
+		u.Scheme = "http"
+	}
+
+	browser, err := newLocalRodBrowser(ctx, timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = browser.Close() }()
+
+	page, err := browser.Page(proto.TargetCreateTarget{URL: u.String()})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = page.Close() }()
+
+	if err := page.WaitLoad(); err != nil {
+		return nil, err
+	}
+
+	data, err := page.Screenshot(fullPage, nil)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// newLocalRodBrowser launches a local Chromium instance inside this container
+// using Rod's launcher and connects to it.
+func newLocalRodBrowser(ctx context.Context, timeout time.Duration) (*rod.Browser, error) {
+	var l *launcher.Launcher
+
+	if path, has := launcher.LookPath(); has {
+		l = launcher.New().Bin(path)
+	} else {
+		l = launcher.New()
+	}
+
+	l = l.Headless(true).NoSandbox(true)
+
+	u, err := l.Launch()
+	if err != nil {
+		return nil, err
+	}
+
+	browser := rod.New().ControlURL(u).Context(ctx).Timeout(timeout)
+	if err := browser.Connect(); err != nil {
+		// Ensure the launched browser is killed if we failed to connect.
+		l.Kill()
+		return nil, err
+	}
+
+	return browser, nil
 }

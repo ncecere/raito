@@ -23,9 +23,26 @@ services:
     volumes:
       - raito-redis-data:/data
 
+  searxng:
+    image: searxng/searxng:latest
+    container_name: raito-searxng
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      # Base URL as seen from within the Docker network
+      SEARXNG_BASE_URL: "http://searxng:8080"
+    volumes:
+      # Mount minimal settings.yml that enables JSON output
+      - ./searxng:/etc/searxng:ro
+    ports:
+      # Expose SearxNG on the host for debugging (optional)
+      - "8081:8080"
+
   api:
+
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: raito-api:latest
     container_name: raito-api
@@ -43,7 +60,7 @@ services:
 
   worker1:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: raito-api:latest
     container_name: raito-worker-1
@@ -57,7 +74,7 @@ services:
 
   worker2:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: raito-api:latest
     container_name: raito-worker-2

@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,8 +16,10 @@ type ServerConfig struct {
 }
 
 type ScraperConfig struct {
-	UserAgent string `yaml:"userAgent"`
-	TimeoutMs int    `yaml:"timeoutMs"`
+	UserAgent           string `yaml:"userAgent"`
+	TimeoutMs           int    `yaml:"timeoutMs"`
+	LinksSameDomainOnly bool   `yaml:"linksSameDomainOnly"`
+	LinksMaxPerDocument int    `yaml:"linksMaxPerDocument"`
 }
 
 type CrawlerConfig struct {
@@ -27,8 +32,7 @@ type RobotsConfig struct {
 }
 
 type RodConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	BrowserURL string `yaml:"browserURL"`
+	Enabled bool `yaml:"enabled"`
 }
 
 type DatabaseConfig struct {
@@ -52,6 +56,7 @@ type WorkerConfig struct {
 	MaxConcurrentJobs       int `yaml:"maxConcurrentJobs"`
 	PollIntervalMs          int `yaml:"pollIntervalMs"`
 	MaxConcurrentURLsPerJob int `yaml:"maxConcurrentURLsPerJob"`
+	SyncJobWaitTimeoutMs    int `yaml:"syncJobWaitTimeoutMs"`
 }
 
 type OpenAIConfig struct {
@@ -77,6 +82,47 @@ type LLMConfig struct {
 	Google          GoogleLLMConfig `yaml:"google"`
 }
 
+// SearxngConfig holds provider-specific configuration for SearxNG-based search.
+type SearxngConfig struct {
+	BaseURL      string `yaml:"baseURL"`
+	DefaultLimit int    `yaml:"defaultLimit"`
+	TimeoutMs    int    `yaml:"timeoutMs"`
+}
+
+// SearchConfig controls the optional /v1/search endpoint and its provider.
+type SearchConfig struct {
+	Enabled              bool          `yaml:"enabled"`
+	Provider             string        `yaml:"provider"`
+	MaxResults           int           `yaml:"maxResults"`
+	TimeoutMs            int           `yaml:"timeoutMs"`
+	MaxConcurrentScrapes int           `yaml:"maxConcurrentScrapes"`
+	Searxng              SearxngConfig `yaml:"searxng"`
+}
+
+// JobTTLConfig controls per-job-type retention in days.
+type JobTTLConfig struct {
+	DefaultDays int `yaml:"defaultDays"`
+	ScrapeDays  int `yaml:"scrapeDays"`
+	MapDays     int `yaml:"mapDays"`
+	ExtractDays int `yaml:"extractDays"`
+	CrawlDays   int `yaml:"crawlDays"`
+}
+
+// DocumentTTLConfig controls retention for stored documents (currently
+// used for crawl documents) in days.
+type DocumentTTLConfig struct {
+	DefaultDays int `yaml:"defaultDays"`
+}
+
+// RetentionConfig controls TTL-like deletion of old jobs and documents
+// so that the database does not grow without bound over time.
+type RetentionConfig struct {
+	Enabled                bool              `yaml:"enabled"`
+	CleanupIntervalMinutes int               `yaml:"cleanupIntervalMinutes"`
+	Jobs                   JobTTLConfig      `yaml:"jobs"`
+	Documents              DocumentTTLConfig `yaml:"documents"`
+}
+
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
 	Scraper   ScraperConfig   `yaml:"scraper"`
@@ -89,6 +135,8 @@ type Config struct {
 	RateLimit RateLimitConfig `yaml:"ratelimit"`
 	Worker    WorkerConfig    `yaml:"worker"`
 	LLM       LLMConfig       `yaml:"llm"`
+	Search    SearchConfig    `yaml:"search"`
+	Retention RetentionConfig `yaml:"retention"`
 }
 
 func Load(path string) *Config {
@@ -104,4 +152,37 @@ func Load(path string) *Config {
 	}
 
 	return &cfg
+}
+
+// Validate performs basic sanity checks on the loaded configuration.
+// It focuses on LLM defaults so that obviously misconfigured providers
+// fail fast at startup rather than during the first request.
+func (cfg *Config) Validate() error {
+	if cfg == nil {
+		return errors.New("config is nil")
+	}
+
+	provider := strings.TrimSpace(cfg.LLM.DefaultProvider)
+	if provider == "" {
+		return errors.New("llm.defaultProvider must be set to 'openai', 'anthropic', or 'google'")
+	}
+
+	switch provider {
+	case "openai":
+		if cfg.LLM.OpenAI.APIKey == "" || cfg.LLM.OpenAI.Model == "" {
+			return errors.New("openai llm provider is not fully configured")
+		}
+	case "anthropic":
+		if cfg.LLM.Anthropic.APIKey == "" || cfg.LLM.Anthropic.Model == "" {
+			return errors.New("anthropic llm provider is not fully configured")
+		}
+	case "google":
+		if cfg.LLM.Google.APIKey == "" || cfg.LLM.Google.Model == "" {
+			return errors.New("google llm provider is not fully configured")
+		}
+	default:
+		return fmt.Errorf("unsupported llm.defaultProvider: %s", provider)
+	}
+
+	return nil
 }

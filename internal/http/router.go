@@ -24,10 +24,14 @@ type Server struct {
 func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server {
 	app := fiber.New()
 
-	// Inject config and store into context for handlers
+	// Construct a job queue-backed executor for heavy operations
+	exec := NewJobQueueExecutor(cfg, st, logger)
+
+	// Inject config, store, and executor into context for handlers
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("config", cfg)
 		c.Locals("store", st)
+		c.Locals("executor", exec)
 		return c.Next()
 	})
 
@@ -41,6 +45,9 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 			reqID = uuid.New().String()
 		}
 		c.Locals("request_id", reqID)
+		if logger != nil {
+			c.Locals("logger", logger)
+		}
 
 		err := c.Next()
 
@@ -163,4 +170,8 @@ func registerV1Routes(group fiber.Router) {
 	group.Post("/crawl", crawlHandler)
 	group.Get("/crawl/:id", crawlStatusHandler)
 	group.Post("/extract", extractHandler)
+	group.Get("/extract/:id", extractStatusHandler)
+	group.Post("/batch/scrape", batchScrapeHandler)
+	group.Get("/batch/scrape/:id", batchScrapeStatusHandler)
+	group.Post("/search", searchHandler)
 }

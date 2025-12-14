@@ -14,7 +14,7 @@ import (
 )
 
 const getDocumentsByJobID = `-- name: GetDocumentsByJobID :many
-SELECT id, job_id, url, markdown, html, raw_html, metadata, status_code, created_at FROM documents
+SELECT id, job_id, url, markdown, html, raw_html, metadata, status_code, created_at, engine FROM documents
 WHERE job_id = $1
 ORDER BY id ASC
 `
@@ -38,6 +38,7 @@ func (q *Queries) GetDocumentsByJobID(ctx context.Context, jobID uuid.UUID) ([]D
 			&i.Metadata,
 			&i.StatusCode,
 			&i.CreatedAt,
+			&i.Engine,
 		); err != nil {
 			return nil, err
 		}
@@ -53,8 +54,8 @@ func (q *Queries) GetDocumentsByJobID(ctx context.Context, jobID uuid.UUID) ([]D
 }
 
 const insertDocument = `-- name: InsertDocument :exec
-INSERT INTO documents (job_id, url, markdown, html, raw_html, metadata, status_code)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO documents (job_id, url, markdown, html, raw_html, metadata, status_code, engine)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertDocumentParams struct {
@@ -65,6 +66,7 @@ type InsertDocumentParams struct {
 	RawHtml    sql.NullString
 	Metadata   json.RawMessage
 	StatusCode sql.NullInt32
+	Engine     sql.NullString
 }
 
 func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) error {
@@ -76,6 +78,7 @@ func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) 
 		arg.RawHtml,
 		arg.Metadata,
 		arg.StatusCode,
+		arg.Engine,
 	)
 	return err
 }
