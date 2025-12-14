@@ -40,11 +40,20 @@ type Results struct {
 }
 
 // Provider defines the contract for pluggable search providers.
+// Implementations are responsible for mapping a provider-agnostic
+// Request into provider-specific API calls and normalizing results
+// back into the shared Results shape. Providers should:
+//   - respect the Limit and Timeout fields where possible,
+//   - treat IgnoreInvalidURL as a hint for filtering malformed URLs,
+//   - avoid returning sensitive configuration details in errors.
 type Provider interface {
 	Search(ctx context.Context, req *Request) (*Results, error)
 }
 
 // NewProviderFromConfig constructs a search Provider based on configuration.
+// Today this supports only a SearxNG-backed provider, but the Provider
+// interface is intentionally narrow so additional providers (e.g. direct
+// web search APIs) can be added without touching callers.
 func NewProviderFromConfig(cfg *config.Config) (Provider, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
