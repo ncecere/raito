@@ -14,7 +14,7 @@ type ScrapeFormat struct {
 // but only includes the most relevant fields for Raito v1.
 type ScrapeRequest struct {
 	URL                 string            `json:"url"`
-	Formats             []interface{}     `json:"formats,omitempty"`
+	Formats             []any             `json:"formats,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
 	IncludeTags         []string          `json:"includeTags,omitempty"`
 	ExcludeTags         []string          `json:"excludeTags,omitempty"`
@@ -50,10 +50,10 @@ type LinkMetadata = model.LinkMetadata
 
 // ErrorResponse matches Firecrawl's error envelope shape.
 type ErrorResponse struct {
-	Success bool        `json:"success"`
-	Code    string      `json:"code,omitempty"`
-	Error   string      `json:"error"`
-	Details interface{} `json:"details,omitempty"`
+	Success bool   `json:"success"`
+	Code    string `json:"code,omitempty"`
+	Error   string `json:"error"`
+	Details any    `json:"details,omitempty"`
 }
 
 // ScrapeResponse matches Firecrawl v2's ScrapeResponse union shape.
@@ -97,22 +97,22 @@ type MapResponse struct {
 // For now, formats are provided at the top level and control which
 // fields are included in crawl documents when retrieved.
 type CrawlRequest struct {
-	URL                string        `json:"url"`
-	Origin             string        `json:"origin,omitempty"`
-	IncludePaths       []string      `json:"includePaths,omitempty"`
-	ExcludePaths       []string      `json:"excludePaths,omitempty"`
-	Limit              *int          `json:"limit,omitempty"`
-	MaxDiscoveryDepth  *int          `json:"maxDiscoveryDepth,omitempty"`
-	AllowExternalLinks *bool         `json:"allowExternalLinks,omitempty"`
-	AllowSubdomains    *bool         `json:"allowSubdomains,omitempty"`
-	IgnoreRobotsTxt    *bool         `json:"ignoreRobotsTxt,omitempty"`
-	Sitemap            string        `json:"sitemap,omitempty"`
-	DeduplicateSimilar bool          `json:"deduplicateSimilarURLs,omitempty"`
-	IgnoreQueryParams  *bool         `json:"ignoreQueryParameters,omitempty"`
-	RegexOnFullURL     *bool         `json:"regexOnFullURL,omitempty"`
-	Delay              *int          `json:"delay,omitempty"`
-	Webhook            string        `json:"webhook,omitempty"`
-	Formats            []interface{} `json:"formats,omitempty"`
+	URL                string   `json:"url"`
+	Origin             string   `json:"origin,omitempty"`
+	IncludePaths       []string `json:"includePaths,omitempty"`
+	ExcludePaths       []string `json:"excludePaths,omitempty"`
+	Limit              *int     `json:"limit,omitempty"`
+	MaxDiscoveryDepth  *int     `json:"maxDiscoveryDepth,omitempty"`
+	AllowExternalLinks *bool    `json:"allowExternalLinks,omitempty"`
+	AllowSubdomains    *bool    `json:"allowSubdomains,omitempty"`
+	IgnoreRobotsTxt    *bool    `json:"ignoreRobotsTxt,omitempty"`
+	Sitemap            string   `json:"sitemap,omitempty"`
+	DeduplicateSimilar bool     `json:"deduplicateSimilarURLs,omitempty"`
+	IgnoreQueryParams  *bool    `json:"ignoreQueryParameters,omitempty"`
+	RegexOnFullURL     *bool    `json:"regexOnFullURL,omitempty"`
+	Delay              *int     `json:"delay,omitempty"`
+	Webhook            string   `json:"webhook,omitempty"`
+	Formats            []any    `json:"formats,omitempty"`
 
 	// Advanced crawl options (Phase 10)
 	CrawlEntireDomain *bool          `json:"crawlEntireDomain,omitempty"`
@@ -123,7 +123,7 @@ type CrawlRequest struct {
 // ScrapeOptions captures per-page scrape configuration that can be
 // passed through from crawl-level options.
 type ScrapeOptions struct {
-	Formats             []interface{}     `json:"formats,omitempty"`
+	Formats             []any             `json:"formats,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
 	IncludeTags         []string          `json:"includeTags,omitempty"`
 	ExcludeTags         []string          `json:"excludeTags,omitempty"`
@@ -162,25 +162,25 @@ type ExtractField struct {
 // Legacy `url` and `fields` modes have been removed from the public
 // API; requests must provide `urls` and a `schema`.
 type ExtractRequest struct {
-	URLs               []string               `json:"urls"`
-	Schema             map[string]interface{} `json:"schema,omitempty"`
-	Prompt             string                 `json:"prompt,omitempty"`
-	SystemPrompt       string                 `json:"systemPrompt,omitempty"`
-	Provider           string                 `json:"provider,omitempty"` // openai, anthropic, google
-	Model              string                 `json:"model,omitempty"`
-	Strict             bool                   `json:"strict,omitempty"`
-	IgnoreInvalidURLs  *bool                  `json:"ignoreInvalidURLs,omitempty"`
-	EnableWebSearch    *bool                  `json:"enableWebSearch,omitempty"`
-	AllowExternalLinks *bool                  `json:"allowExternalLinks,omitempty"`
-	ShowSources        *bool                  `json:"showSources,omitempty"`
-	ScrapeOptions      *ScrapeOptions         `json:"scrapeOptions,omitempty"`
-	Integration        string                 `json:"integration,omitempty"`
+	URLs               []string       `json:"urls"`
+	Schema             map[string]any `json:"schema,omitempty"`
+	Prompt             string         `json:"prompt,omitempty"`
+	SystemPrompt       string         `json:"systemPrompt,omitempty"`
+	Provider           string         `json:"provider,omitempty"` // openai, anthropic, google
+	Model              string         `json:"model,omitempty"`
+	Strict             bool           `json:"strict,omitempty"`
+	IgnoreInvalidURLs  *bool          `json:"ignoreInvalidURLs,omitempty"`
+	EnableWebSearch    *bool          `json:"enableWebSearch,omitempty"`
+	AllowExternalLinks *bool          `json:"allowExternalLinks,omitempty"`
+	ShowSources        *bool          `json:"showSources,omitempty"`
+	ScrapeOptions      *ScrapeOptions `json:"scrapeOptions,omitempty"`
+	Integration        string         `json:"integration,omitempty"`
 }
 
 type ExtractResult struct {
-	URL    string                 `json:"url"`
-	Fields map[string]interface{} `json:"fields"`
-	Raw    *Document              `json:"raw,omitempty"`
+	URL    string         `json:"url"`
+	Fields map[string]any `json:"fields"`
+	Raw    *Document      `json:"raw,omitempty"`
 }
 
 type ExtractResponse struct {
@@ -200,14 +200,14 @@ const (
 )
 
 type ExtractStatusResponse struct {
-	Success     bool                   `json:"success"`
-	Data        map[string]interface{} `json:"data,omitempty"`
-	Status      ExtractJobStatus       `json:"status"`
-	ExpiresAt   string                 `json:"expiresAt,omitempty"`
-	TokensUsed  int                    `json:"tokensUsed,omitempty"`
-	CreditsUsed int                    `json:"creditsUsed,omitempty"`
-	Code        string                 `json:"code,omitempty"`
-	Error       string                 `json:"error,omitempty"`
+	Success     bool             `json:"success"`
+	Data        map[string]any   `json:"data,omitempty"`
+	Status      ExtractJobStatus `json:"status"`
+	ExpiresAt   string           `json:"expiresAt,omitempty"`
+	TokensUsed  int              `json:"tokensUsed,omitempty"`
+	CreditsUsed int              `json:"creditsUsed,omitempty"`
+	Code        string           `json:"code,omitempty"`
+	Error       string           `json:"error,omitempty"`
 }
 
 const (
@@ -232,8 +232,8 @@ type CrawlResponse struct {
 }
 
 type BatchScrapeRequest struct {
-	URLs    []string      `json:"urls"`
-	Formats []interface{} `json:"formats,omitempty"`
+	URLs    []string `json:"urls"`
+	Formats []any    `json:"formats,omitempty"`
 }
 
 type BatchScrapeStatus string

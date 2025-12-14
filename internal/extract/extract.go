@@ -18,7 +18,7 @@ func NewService(factory func() (llm.Client, llm.Provider, string, error)) *Servi
 
 // Extract takes a single URL's markdown plus field specs and delegates to the
 // configured LLM client.
-func (s *Service) Extract(ctx context.Context, url string, markdown string, fields []llm.FieldSpec, prompt string, timeout time.Duration) (map[string]interface{}, error) {
+func (s *Service) Extract(ctx context.Context, url string, markdown string, fields []llm.FieldSpec, prompt string, timeout time.Duration) (map[string]any, error) {
 	client, _, _, err := s.clientFactory()
 	if err != nil {
 		return nil, err

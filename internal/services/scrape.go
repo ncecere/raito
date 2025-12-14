@@ -15,7 +15,7 @@ import (
 // formats.
 type ScrapeRequest struct {
 	Result  *scraper.Result
-	Formats []interface{}
+	Formats []any
 }
 
 // ScrapeResult wraps the constructed Document so the service API

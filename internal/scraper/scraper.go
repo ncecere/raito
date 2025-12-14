@@ -36,7 +36,7 @@ type Result struct {
 	RawHTML      string
 	Links        []string
 	LinkMetadata []LinkMetadata
-	Metadata     map[string]interface{}
+	Metadata     map[string]any
 	Status       int
 	Engine       string
 }
@@ -109,7 +109,7 @@ func (s *HTTPScraper) Scrape(ctx context.Context, req Request) (*Result, error) 
 			RawHTML:  htmlStr,
 			Status:   resp.StatusCode,
 			Engine:   "http",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"statusCode": resp.StatusCode,
 				"sourceURL":  u.String(),
 			},
@@ -178,7 +178,7 @@ func (s *HTTPScraper) Scrape(ctx context.Context, req Request) (*Result, error) 
 		}
 	}
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":         title,
 		"description":   desc,
 		"language":      lang,

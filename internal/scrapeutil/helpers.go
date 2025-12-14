@@ -6,7 +6,7 @@ import (
 )
 
 // ToString safely converts an interface value to string.
-func ToString(v interface{}) string {
+func ToString(v any) string {
 	if v == nil {
 		return ""
 	}
@@ -62,7 +62,7 @@ func FilterLinks(links []string, baseURL string, sameDomainOnly bool, maxPerDocu
 
 // WantsFormat inspects a Firecrawl-style formats array to determine
 // whether a given format type (e.g., "summary") was requested.
-func WantsFormat(formats []interface{}, name string) bool {
+func WantsFormat(formats []any, name string) bool {
 	if len(formats) == 0 {
 		return false
 	}
@@ -74,7 +74,7 @@ func WantsFormat(formats []interface{}, name string) bool {
 			if strings.ToLower(v) == target {
 				return true
 			}
-		case map[string]interface{}:
+		case map[string]any:
 			if t, ok := v["type"]; ok {
 				if s, ok := t.(string); ok && strings.ToLower(s) == target {
 					return true
@@ -89,7 +89,7 @@ func WantsFormat(formats []interface{}, name string) bool {
 // GetJSONFormatConfig scans a Firecrawl-style formats array and returns
 // the first json format configuration, if present. It supports both
 // simple string formats ("json") and object formats ({type: "json", ...}).
-func GetJSONFormatConfig(formats []interface{}) (bool, string, map[string]interface{}) {
+func GetJSONFormatConfig(formats []any) (bool, string, map[string]any) {
 	if len(formats) == 0 {
 		return false, "", nil
 	}
@@ -100,7 +100,7 @@ func GetJSONFormatConfig(formats []interface{}) (bool, string, map[string]interf
 			if strings.ToLower(v) == "json" {
 				return true, "", nil
 			}
-		case map[string]interface{}:
+		case map[string]any:
 			rawType, ok := v["type"].(string)
 			if !ok || strings.ToLower(rawType) != "json" {
 				continue
@@ -111,8 +111,8 @@ func GetJSONFormatConfig(formats []interface{}) (bool, string, map[string]interf
 				prompt = p
 			}
 
-			var schema map[string]interface{}
-			if s, ok := v["schema"].(map[string]interface{}); ok {
+			var schema map[string]any
+			if s, ok := v["schema"].(map[string]any); ok {
 				schema = s
 			}
 
@@ -125,7 +125,7 @@ func GetJSONFormatConfig(formats []interface{}) (bool, string, map[string]interf
 
 // GetBrandingFormatConfig scans formats for a branding entry and returns
 // whether it was requested along with an optional custom prompt.
-func GetBrandingFormatConfig(formats []interface{}) (bool, string) {
+func GetBrandingFormatConfig(formats []any) (bool, string) {
 	if len(formats) == 0 {
 		return false, ""
 	}
@@ -136,7 +136,7 @@ func GetBrandingFormatConfig(formats []interface{}) (bool, string) {
 			if strings.ToLower(v) == "branding" {
 				return true, ""
 			}
-		case map[string]interface{}:
+		case map[string]any:
 			rawType, ok := v["type"].(string)
 			if !ok || strings.ToLower(rawType) != "branding" {
 				continue
@@ -157,7 +157,7 @@ func GetBrandingFormatConfig(formats []interface{}) (bool, string) {
 // NormalizeBrandingImages prunes nil values from the images sub-object
 // of a branding profile so that fields like favicon and ogImage are
 // omitted rather than returned as explicit nulls.
-func NormalizeBrandingImages(branding map[string]interface{}) {
+func NormalizeBrandingImages(branding map[string]any) {
 	if branding == nil {
 		return
 	}
@@ -167,7 +167,7 @@ func NormalizeBrandingImages(branding map[string]interface{}) {
 		return
 	}
 
-	imagesMap, ok := imagesVal.(map[string]interface{})
+	imagesMap, ok := imagesVal.(map[string]any)
 	if !ok {
 		return
 	}

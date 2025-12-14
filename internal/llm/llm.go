@@ -45,7 +45,7 @@ type ExtractRequest struct {
 
 // ExtractResult is the structured output from the LLM.
 type ExtractResult struct {
-	Fields map[string]interface{}
+	Fields map[string]any
 }
 
 // Client is the abstraction used by the HTTP layer.
@@ -57,8 +57,8 @@ type Client interface {
 // It first tries the whole string, and if that fails, it attempts to
 // extract the first {...} block. On failure it returns an error so the
 // caller can decide how to fall back.
-func parseJSONFields(content string) (map[string]interface{}, error) {
-	var fields map[string]interface{}
+func parseJSONFields(content string) (map[string]any, error) {
+	var fields map[string]any
 	if err := json.Unmarshal([]byte(content), &fields); err == nil {
 		return fields, nil
 	}
@@ -283,7 +283,7 @@ func (c *openAIClient) ExtractFields(ctx context.Context, req ExtractRequest) (E
 		if req.Strict {
 			return ExtractResult{}, fmt.Errorf("failed to parse JSON from LLM response: %w", err)
 		}
-		fields = map[string]interface{}{"_raw": content}
+		fields = map[string]any{"_raw": content}
 	}
 
 	return ExtractResult{Fields: fields}, nil
@@ -350,7 +350,7 @@ func (c *anthropicClient) ExtractFields(ctx context.Context, req ExtractRequest)
 		if req.Strict {
 			return ExtractResult{}, fmt.Errorf("failed to parse JSON from LLM response: %w", err)
 		}
-		fields = map[string]interface{}{"_raw": content}
+		fields = map[string]any{"_raw": content}
 	}
 
 	return ExtractResult{Fields: fields}, nil
@@ -416,7 +416,7 @@ func (c *googleClient) ExtractFields(ctx context.Context, req ExtractRequest) (E
 		if req.Strict {
 			return ExtractResult{}, fmt.Errorf("failed to parse JSON from LLM response: %w", err)
 		}
-		fields = map[string]interface{}{"_raw": content}
+		fields = map[string]any{"_raw": content}
 	}
 
 	return ExtractResult{Fields: fields}, nil

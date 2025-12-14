@@ -26,17 +26,17 @@ const (
 // HasFormat reports whether the given Firecrawl-style formats array
 // contains the specified format name. It is a thin wrapper around
 // scrapeutil.WantsFormat so callers do not need to depend on helpers.
-func HasFormat(formats []interface{}, name string) bool {
+func HasFormat(formats []any, name string) bool {
 	return scrapeutil.WantsFormat(formats, name)
 }
 
 // normalizeFormatName converts a Firecrawl-style format descriptor
 // (either a string or {type: string}) into a lowercased name.
-func normalizeFormatName(f interface{}) string {
+func normalizeFormatName(f any) string {
 	switch v := f.(type) {
 	case string:
 		return strings.ToLower(strings.TrimSpace(v))
-	case map[string]interface{}:
+	case map[string]any:
 		if t, ok := v["type"].(string); ok {
 			return strings.ToLower(strings.TrimSpace(t))
 		}
@@ -51,7 +51,7 @@ func normalizeFormatName(f interface{}) string {
 //
 // The returned error message is intended to be user-facing and is
 // wired directly into HTTP error responses.
-func ValidateFormatsForEndpoint(endpoint string, formats []interface{}) error {
+func ValidateFormatsForEndpoint(endpoint string, formats []any) error {
 	if len(formats) == 0 {
 		return nil
 	}

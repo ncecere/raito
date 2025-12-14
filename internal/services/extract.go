@@ -12,7 +12,7 @@ import (
 // enqueue request used by ExtractService.
 type ExtractRequest struct {
 	ID         uuid.UUID
-	Body       interface{}
+	Body       any
 	PrimaryURL string
 }
 

@@ -53,7 +53,7 @@ type SearchService interface {
 }
 
 type SearchScrapeOptions struct {
-	Formats    []interface{}
+	Formats    []any
 	Headers    map[string]string
 	UseBrowser *bool
 	Location   *LocationOptions
@@ -267,14 +267,14 @@ func (s *searchService) ScrapeResults(ctx context.Context, base []search.Result,
 			continue
 		}
 
-		formats := []interface{}{}
+		formats := []any{}
 		if opts != nil {
 			formats = opts.Formats
 		}
 		// For /v1/search, when no formats are provided we only include
 		// markdown by default for scraped documents.
 		if len(formats) == 0 {
-			formats = []interface{}{"markdown"}
+			formats = []any{"markdown"}
 		}
 
 		svcRes, err := s.scraper.Scrape(ctx, &ScrapeRequest{

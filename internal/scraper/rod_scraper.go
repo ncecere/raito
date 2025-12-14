@@ -74,7 +74,7 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 			RawHTML:  htmlStr,
 			Status:   200,
 			Engine:   "browser",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"statusCode": 200,
 				"sourceURL":  u.String(),
 			},
@@ -134,7 +134,7 @@ func (r *RodScraper) Scrape(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":         title,
 		"description":   desc,
 		"language":      lang,

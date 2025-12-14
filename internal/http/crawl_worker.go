@@ -402,10 +402,10 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 					} else {
 						metrics.RecordLLMExtract(string(provider), modelName, true)
 						if v, ok := llmRes.Fields["json"]; ok {
-							if m, ok2 := v.(map[string]interface{}); ok2 {
+							if m, ok2 := v.(map[string]any); ok2 {
 								md.JSON = m
 							} else {
-								md.JSON = map[string]interface{}{"_value": v}
+								md.JSON = map[string]any{"_value": v}
 							}
 						}
 					}
@@ -446,11 +446,11 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 					} else {
 						metrics.RecordLLMExtract(string(provider), modelName, true)
 						if v, ok := llmRes.Fields["branding"]; ok {
-							if m, ok := v.(map[string]interface{}); ok {
+							if m, ok := v.(map[string]any); ok {
 								scrapeutil.NormalizeBrandingImages(m)
 								md.Branding = m
 							} else {
-								md.Branding = map[string]interface{}{"_value": v}
+								md.Branding = map[string]any{"_value": v}
 							}
 						}
 					}
@@ -668,8 +668,8 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 		return req.SystemPrompt + "\n\n" + userPrompt
 	}
 
-	results := make([]map[string]interface{}, 0, len(urls))
-	sources := make([]map[string]interface{}, 0, len(urls))
+	results := make([]map[string]any, 0, len(urls))
+	sources := make([]map[string]any, 0, len(urls))
 	failedByCode := make(map[string]int)
 	var successCount int
 
@@ -703,14 +703,14 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 		res, err := s.Scrape(ctx, sReq)
 		if err != nil {
 			if ignoreInvalid {
-				results = append(results, map[string]interface{}{
+				results = append(results, map[string]any{
 					"url":     u,
 					"success": false,
 					"error":   "SCRAPE_FAILED: " + err.Error(),
 				})
 				failedByCode["SCRAPE_FAILED"]++
 				if showSources {
-					sources = append(sources, map[string]interface{}{
+					sources = append(sources, map[string]any{
 						"url":        u,
 						"statusCode": 0,
 						"error":      "SCRAPE_FAILED: " + err.Error(),
@@ -748,14 +748,14 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 		if err != nil {
 			metrics.RecordLLMExtract(string(provider), modelName, false)
 			if ignoreInvalid {
-				results = append(results, map[string]interface{}{
+				results = append(results, map[string]any{
 					"url":     u,
 					"success": false,
 					"error":   "EXTRACT_FAILED: " + err.Error(),
 				})
 				failedByCode["EXTRACT_FAILED"]++
 				if showSources {
-					sources = append(sources, map[string]interface{}{
+					sources = append(sources, map[string]any{
 						"url":        u,
 						"statusCode": res.Status,
 						"error":      "EXTRACT_FAILED: " + err.Error(),
@@ -771,12 +771,12 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
-		var jsonValue map[string]interface{}
+		var jsonValue map[string]any
 		if v, ok := llmRes.Fields["json"]; ok {
-			if m, ok := v.(map[string]interface{}); ok {
+			if m, ok := v.(map[string]any); ok {
 				jsonValue = m
 			} else {
-				jsonValue = map[string]interface{}{"_value": v}
+				jsonValue = map[string]any{"_value": v}
 			}
 		} else if len(llmRes.Fields) > 0 {
 			// Fallback: ensure we still return something useful.
@@ -785,14 +785,14 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 
 		if jsonValue == nil || len(jsonValue) == 0 {
 			if ignoreInvalid {
-				results = append(results, map[string]interface{}{
+				results = append(results, map[string]any{
 					"url":     u,
 					"success": false,
 					"error":   "EXTRACT_EMPTY_RESULT: LLM did not return any fields",
 				})
 				failedByCode["EXTRACT_EMPTY_RESULT"]++
 				if showSources {
-					sources = append(sources, map[string]interface{}{
+					sources = append(sources, map[string]any{
 						"url":        u,
 						"statusCode": res.Status,
 						"error":      "EXTRACT_EMPTY_RESULT: LLM did not return any fields",
@@ -805,13 +805,13 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 			return
 		}
 
-		results = append(results, map[string]interface{}{
+		results = append(results, map[string]any{
 			"url":     u,
 			"success": true,
 			"json":    jsonValue,
 		})
 		if showSources {
-			sources = append(sources, map[string]interface{}{
+			sources = append(sources, map[string]any{
 				"url":        u,
 				"statusCode": res.Status,
 				"error":      "",
@@ -836,14 +836,14 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID u
 	totalResults := len(results)
 	failedCount := totalResults - successCount
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"results": results,
 	}
 	if showSources && len(sources) > 0 {
 		payload["sources"] = sources
 	}
 
-	summary := map[string]interface{}{
+	summary := map[string]any{
 		"total":   totalResults,
 		"success": successCount,
 		"failed":  failedCount,
@@ -1160,10 +1160,10 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
 		if v, ok := llmRes.Fields["json"]; ok {
-			if m, ok := v.(map[string]interface{}); ok {
+			if m, ok := v.(map[string]any); ok {
 				doc.JSON = m
 			} else {
-				doc.JSON = map[string]interface{}{"_value": v}
+				doc.JSON = map[string]any{"_value": v}
 			}
 		}
 	}
@@ -1216,11 +1216,11 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
 		if v, ok := llmRes.Fields["branding"]; ok {
-			if m, ok := v.(map[string]interface{}); ok {
+			if m, ok := v.(map[string]any); ok {
 				scrapeutil.NormalizeBrandingImages(m)
 				doc.Branding = m
 			} else {
-				doc.Branding = map[string]interface{}{"_value": v}
+				doc.Branding = map[string]any{"_value": v}
 			}
 		}
 	}

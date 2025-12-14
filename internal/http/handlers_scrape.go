@@ -317,14 +317,14 @@ func scrapeHandler(c *fiber.Ctx) error {
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
 		if v, ok := llmRes.Fields["json"]; ok {
-			// v is expected to be a nested map[string]interface{} representing structured JSON.
-			if m, ok := v.(map[string]interface{}); ok {
+			// v is expected to be a nested map[string]any representing structured JSON.
+			if m, ok := v.(map[string]any); ok {
 				doc.JSON = m
 			} else {
 				// If the LLM returns a non-object, still expose it as best-effort.
 				// The client can decide how to interpret this.
 				// We wrap it into a single-field object for consistency.
-				doc.JSON = map[string]interface{}{"_value": v}
+				doc.JSON = map[string]any{"_value": v}
 			}
 		}
 	}
@@ -395,11 +395,11 @@ func scrapeHandler(c *fiber.Ctx) error {
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
 		if v, ok := llmRes.Fields["branding"]; ok {
-			if m, ok := v.(map[string]interface{}); ok {
+			if m, ok := v.(map[string]any); ok {
 				scrapeutil.NormalizeBrandingImages(m)
 				doc.Branding = m
 			} else {
-				doc.Branding = map[string]interface{}{"_value": v}
+				doc.Branding = map[string]any{"_value": v}
 			}
 		}
 	}
