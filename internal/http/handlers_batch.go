@@ -65,6 +65,19 @@ func batchScrapeHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	// Structured log event for batch scrape job enqueue.
+	if loggerVal := c.Locals("logger"); loggerVal != nil {
+		if lg, ok := loggerVal.(interface{ Info(msg string, args ...any) }); ok {
+			attrs := []any{
+				"batch_scrape_id", id.String(),
+				"primary_url", primaryURL,
+				"urls_count", len(reqBody.URLs),
+				"has_formats", len(reqBody.Formats) > 0,
+			}
+			lg.Info("batch_scrape_enqueued", attrs...)
+		}
+	}
+
 	protocol := c.Protocol()
 	host := c.Hostname()
 
@@ -109,6 +122,25 @@ func batchScrapeStatusHandler(c *fiber.Ctx) error {
 		ID:      job.ID.String(),
 		Status:  BatchScrapeStatus(job.Status),
 		Total:   len(docs),
+	}
+
+	// Job-level logs for batch scrape completion/failure.
+	if loggerVal := c.Locals("logger"); loggerVal != nil {
+		if lg, ok := loggerVal.(interface{ Info(msg string, args ...any) }); ok {
+			event := "batch_scrape_completed"
+			if job.Status != "completed" {
+				event = "batch_scrape_failed"
+			}
+			attrs := []any{
+				"batch_scrape_id", job.ID.String(),
+				"status", job.Status,
+				"total_documents", len(docs),
+			}
+			if job.Error.Valid {
+				attrs = append(attrs, "error", job.Error.String)
+			}
+			lg.Info(event, attrs...)
+		}
 	}
 
 	// Map DB documents into API documents only when completed

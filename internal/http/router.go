@@ -25,7 +25,7 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 	app := fiber.New()
 
 	// Construct a job queue-backed executor for heavy operations
-	exec := NewJobQueueExecutor(cfg, st)
+	exec := NewJobQueueExecutor(cfg, st, logger)
 
 	// Inject config, store, and executor into context for handlers
 	app.Use(func(c *fiber.Ctx) error {

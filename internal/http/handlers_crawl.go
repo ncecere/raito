@@ -32,7 +32,7 @@ func crawlHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	_ = c.Locals("config").(*config.Config)
+	cfg := c.Locals("config").(*config.Config)
 	st := c.Locals("store").(*store.Store)
 
 	// Generate a crawl job ID (uuidv7 preferred)
@@ -54,6 +54,24 @@ func crawlHandler(c *fiber.Ctx) error {
 			Code:    "CRAWL_JOB_CREATE_FAILED",
 			Error:   err.Error(),
 		})
+	}
+
+	// Structured log event for crawl job enqueue.
+	if loggerVal := c.Locals("logger"); loggerVal != nil {
+		if lg, ok := loggerVal.(interface{ Info(msg string, args ...any) }); ok {
+			limit := cfg.Crawler.MaxPagesDefault
+			if reqBody.Limit != nil && *reqBody.Limit > 0 {
+				limit = *reqBody.Limit
+			}
+			attrs := []any{
+				"crawl_id", id.String(),
+				"url", reqBody.URL,
+				"limit", limit,
+				"allow_external_links", reqBody.AllowExternalLinks,
+				"allow_subdomains", reqBody.AllowSubdomains,
+			}
+			lg.Info("crawl_enqueued", attrs...)
+		}
 	}
 
 	protocol := c.Protocol()
@@ -100,6 +118,25 @@ func crawlStatusHandler(c *fiber.Ctx) error {
 		ID:      job.ID.String(),
 		Status:  CrawlStatus(job.Status),
 		Total:   len(docs),
+	}
+
+	// Job-level logs for crawl completion/failure.
+	if loggerVal := c.Locals("logger"); loggerVal != nil {
+		if lg, ok := loggerVal.(interface{ Info(msg string, args ...any) }); ok {
+			event := "crawl_completed"
+			if job.Status != "completed" {
+				event = "crawl_failed"
+			}
+			attrs := []any{
+				"crawl_id", job.ID.String(),
+				"status", job.Status,
+				"total_documents", len(docs),
+			}
+			if job.Error.Valid {
+				attrs = append(attrs, "error", job.Error.String)
+			}
+			lg.Info(event, attrs...)
+		}
 	}
 
 	// Map DB documents into API documents only when completed

@@ -38,6 +38,8 @@ The response includes a `key` field. Use that key for requests to `/v1/*`.
 
 These are useful for integrating Raito into monitoring systems and for basic readiness checks.
 
+For a reference of structured log events (request logs and job-level logs for scrape/map/crawl/batch/extract), see `docs/logging.md`.
+
 ---
 
 ## /v1/scrape – single-page scrape

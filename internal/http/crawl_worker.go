@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"strings"
 	"sync/atomic"
-
 	"time"
 
 	"github.com/google/uuid"
 
 	"raito/internal/config"
 	"raito/internal/crawler"
+	"raito/internal/db"
+	"raito/internal/jobs"
 	"raito/internal/llm"
 	"raito/internal/metrics"
 	"raito/internal/model"
@@ -22,212 +23,160 @@ import (
 	"raito/internal/store"
 )
 
-// RetentionStats captures the number of records deleted by TTL cleanup.
-type RetentionStats struct {
-	DocumentsDeleted int64            `json:"documentsDeleted"`
-	JobsDeleted      map[string]int64 `json:"jobsDeleted"`
-}
-
-// cleanupExpiredData deletes old jobs and documents based on retention
-// settings so that the database does not grow without bound.
-func cleanupExpiredData(ctx context.Context, cfg *config.Config, st *store.Store) RetentionStats {
-	now := time.Now().UTC()
-	stats := RetentionStats{JobsDeleted: make(map[string]int64)}
-
-	// Documents TTL (currently crawl documents only)
-	if cfg.Retention.Documents.DefaultDays > 0 {
-		cutoff := now.AddDate(0, 0, -cfg.Retention.Documents.DefaultDays)
-		if n, err := st.DeleteExpiredDocuments(ctx, cutoff); err == nil && n > 0 {
-			stats.DocumentsDeleted += n
-			metrics.RecordRetentionDocuments(n)
-		}
-	}
-
-	// Jobs TTL per job type, falling back to defaultDays when specific
-	// values are not provided.
-	jobTTL := cfg.Retention.Jobs
-
-	applyJobTTL := func(jobType string, days int) {
-		if days <= 0 {
-			return
-		}
-		cutoff := now.AddDate(0, 0, -days)
-		if n, err := st.DeleteExpiredJobsByType(ctx, jobType, cutoff); err == nil && n > 0 {
-			stats.JobsDeleted[jobType] += n
-			metrics.RecordRetentionJobs(jobType, n)
-		}
-	}
-
-	// Helper to compute effective TTL for each known job type.
-	effectiveDays := func(specific int) int {
-		if specific > 0 {
-			return specific
-		}
-		return jobTTL.DefaultDays
-	}
-
-	applyJobTTL("scrape", effectiveDays(jobTTL.ScrapeDays))
-	applyJobTTL("map", effectiveDays(jobTTL.MapDays))
-	applyJobTTL("extract", effectiveDays(jobTTL.ExtractDays))
-	applyJobTTL("crawl", effectiveDays(jobTTL.CrawlDays))
-	applyJobTTL("batch_scrape", effectiveDays(0))
-
-	return stats
-}
-
 // StartCrawlWorker launches a background worker that periodically polls the
-// database for pending crawl jobs and processes them.
+// database for pending jobs and processes them using the shared jobs.Runner.
 func StartCrawlWorker(ctx context.Context, cfg *config.Config, st *store.Store) {
-	go func() {
-		pollInterval := time.Duration(cfg.Worker.PollIntervalMs) * time.Millisecond
-		if pollInterval <= 0 {
-			pollInterval = 2 * time.Second
-		}
+	// Wire up the job executors that know how to handle each job type.
+	execs := jobs.Executors{
+		Map:         NewMapJobExecutor(cfg, st),
+		Crawl:       NewCrawlJobExecutor(cfg, st),
+		Extract:     NewExtractJobExecutor(cfg, st),
+		BatchScrape: NewBatchScrapeJobExecutor(cfg, st),
+		Scrape:      NewScrapeJobExecutor(cfg, st),
+	}
 
-		maxJobs := cfg.Worker.MaxConcurrentJobs
-		if maxJobs <= 0 {
-			maxJobs = 4
-		}
+	runner := jobs.NewRunner(cfg, st, execs)
+	go runner.Start(ctx)
+}
 
-		sem := make(chan struct{}, maxJobs)
-		ticker := time.NewTicker(pollInterval)
-		defer ticker.Stop()
+// crawlJobExecutor implements jobs.CrawlJobExecutor using the existing
+// crawl job implementation in this package.
+type crawlJobExecutor struct {
+	cfg *config.Config
+	st  *store.Store
+}
 
-		var lastCleanup time.Time
-		cleanupInterval := time.Duration(cfg.Retention.CleanupIntervalMinutes) * time.Minute
-		if cleanupInterval <= 0 {
-			cleanupInterval = time.Hour
-		}
+func NewCrawlJobExecutor(cfg *config.Config, st *store.Store) jobs.CrawlJobExecutor {
+	return &crawlJobExecutor{cfg: cfg, st: st}
+}
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
+func (e *crawlJobExecutor) ExecuteCrawlJob(ctx context.Context, job db.Job) {
+	var req CrawlRequest
+	if err := json.Unmarshal(job.Input, &req); err != nil {
+		msg := "invalid crawl job input: " + err.Error()
+		_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusFailed), &msg)
+		return
+	}
 
-			// Periodically run TTL cleanup for jobs/documents.
-			if cfg.Retention.Enabled {
-				now := time.Now().UTC()
-				if lastCleanup.IsZero() || now.Sub(lastCleanup) >= cleanupInterval {
-					_ = cleanupExpiredData(ctx, cfg, st)
-					lastCleanup = now
-				}
-			}
+	// Fallback: ensure URL is set even if the stored input was minimal.
+	if req.URL == "" {
+		req.URL = job.Url
+	}
 
-			// Determine how many new jobs we can start based on current concurrency.
-			capacity := maxJobs - len(sem)
-			if capacity <= 0 {
-				continue
-			}
+	// Mark job running before we start work.
+	_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusRunning), nil)
 
-			jobs, err := st.ListPendingJobs(ctx, int32(capacity))
-			if err != nil {
-				// TODO: add logging once logging is in place
-				continue
-			}
+	// Let the job inherit the worker context; per-request timeouts are
+	// applied inside runCrawlJob for HTTP and LLM.
+	runCrawlJob(ctx, e.cfg, e.st, job.ID, req)
+}
 
-			for _, job := range jobs {
-				job := job
-				sem <- struct{}{}
-				go func() {
-					defer func() { <-sem }()
+// scrapeJobExecutor implements jobs.ScrapeJobExecutor using the existing
+// scrape job implementation in this package.
+type scrapeJobExecutor struct {
+	cfg *config.Config
+	st  *store.Store
+}
 
-					switch job.Type {
-					case "crawl":
-						// Decode the original crawl request from the job input.
-						var req CrawlRequest
-						if err := json.Unmarshal(job.Input, &req); err != nil {
-							msg := "invalid crawl job input: " + err.Error()
-							_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "failed", &msg)
-							return
-						}
+func NewScrapeJobExecutor(cfg *config.Config, st *store.Store) jobs.ScrapeJobExecutor {
+	return &scrapeJobExecutor{cfg: cfg, st: st}
+}
 
-						// Fallback: ensure URL is set even if the stored input was minimal.
-						if req.URL == "" {
-							req.URL = job.Url
-						}
+func (e *scrapeJobExecutor) ExecuteScrapeJob(ctx context.Context, job db.Job) {
+	var req ScrapeRequest
+	if err := json.Unmarshal(job.Input, &req); err != nil {
+		msg := "SCRAPE_FAILED: invalid scrape job input: " + err.Error()
+		_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusFailed), &msg)
+		return
+	}
 
-						// Mark job running before we start work.
-						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "running", nil)
+	if req.URL == "" {
+		req.URL = job.Url
+	}
 
-						// Let the job inherit the worker context; per-request
-						// timeouts are applied inside runCrawlJob for HTTP and LLM.
-						runCrawlJob(ctx, cfg, st, job.ID, req)
-					case "scrape":
-						// Decode the original scrape request from the job input.
-						var req ScrapeRequest
-						if err := json.Unmarshal(job.Input, &req); err != nil {
-							msg := "SCRAPE_FAILED: invalid scrape job input: " + err.Error()
-							_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "failed", &msg)
-							return
-						}
+	_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusRunning), nil)
 
-						// Fallback: ensure URL is set even if the stored input was minimal.
-						if req.URL == "" {
-							req.URL = job.Url
-						}
+	runScrapeJob(ctx, e.cfg, e.st, job.ID, req)
+}
 
-						// Mark job running before we start work.
-						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "running", nil)
+// mapJobExecutor implements jobs.MapJobExecutor using the existing
+// map job implementation in this package.
+type mapJobExecutor struct {
+	cfg *config.Config
+	st  *store.Store
+}
 
-						// Execute the scrape using the worker context and
-						// persist the resulting document into job.output.
-						runScrapeJob(ctx, cfg, st, job.ID, req)
-					case "map":
-						// Decode the original map request from the job input.
-						var req MapRequest
-						if err := json.Unmarshal(job.Input, &req); err != nil {
-							msg := "MAP_FAILED: invalid map job input: " + err.Error()
-							_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "failed", &msg)
-							return
-						}
+func NewMapJobExecutor(cfg *config.Config, st *store.Store) jobs.MapJobExecutor {
+	return &mapJobExecutor{cfg: cfg, st: st}
+}
 
-						if req.URL == "" {
-							req.URL = job.Url
-						}
+func (e *mapJobExecutor) ExecuteMapJob(ctx context.Context, job db.Job) {
+	var req MapRequest
+	if err := json.Unmarshal(job.Input, &req); err != nil {
+		msg := "MAP_FAILED: invalid map job input: " + err.Error()
+		_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusFailed), &msg)
+		return
+	}
 
-						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "running", nil)
+	if req.URL == "" {
+		req.URL = job.Url
+	}
 
-						runMapJob(ctx, cfg, st, job.ID, req)
-					case "extract":
-						// Decode the original extract request from the job input.
-						var req ExtractRequest
-						if err := json.Unmarshal(job.Input, &req); err != nil {
-							msg := "EXTRACT_FAILED: invalid extract job input: " + err.Error()
-							_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "failed", &msg)
-							return
-						}
+	_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusRunning), nil)
 
-						if len(req.URLs) == 0 && job.Url != "" {
-							req.URLs = []string{job.Url}
-						}
+	runMapJob(ctx, e.cfg, e.st, job.ID, req)
+}
 
-						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "running", nil)
+// extractJobExecutor implements jobs.ExtractJobExecutor using the existing
+// extract job implementation in this package.
+type extractJobExecutor struct {
+	cfg *config.Config
+	st  *store.Store
+}
 
-						runExtractJob(ctx, cfg, st, job.ID, req)
+func NewExtractJobExecutor(cfg *config.Config, st *store.Store) jobs.ExtractJobExecutor {
+	return &extractJobExecutor{cfg: cfg, st: st}
+}
 
-					case "batch_scrape":
-						var req BatchScrapeRequest
-						if err := json.Unmarshal(job.Input, &req); err != nil {
-							msg := "BATCH_SCRAPE_FAILED: invalid batch scrape job input: " + err.Error()
-							_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "failed", &msg)
-							return
-						}
+func (e *extractJobExecutor) ExecuteExtractJob(ctx context.Context, job db.Job) {
+	var req ExtractRequest
+	if err := json.Unmarshal(job.Input, &req); err != nil {
+		msg := "EXTRACT_FAILED: invalid extract job input: " + err.Error()
+		_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusFailed), &msg)
+		return
+	}
 
-						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "running", nil)
+	if len(req.URLs) == 0 && job.Url != "" {
+		req.URLs = []string{job.Url}
+	}
 
-						runBatchScrapeJob(ctx, cfg, st, job.ID, req)
-					default:
-						msg := "UNKNOWN_JOB_TYPE: " + job.Type
-						_ = st.UpdateCrawlJobStatus(context.Background(), job.ID, "failed", &msg)
-					}
+	_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusRunning), nil)
 
-				}()
+	runExtractJob(ctx, e.cfg, e.st, job.ID, req)
+}
 
-			}
-		}
-	}()
+// batchScrapeJobExecutor implements jobs.BatchScrapeJobExecutor using the
+// existing batch scrape job implementation in this package.
+type batchScrapeJobExecutor struct {
+	cfg *config.Config
+	st  *store.Store
+}
+
+func NewBatchScrapeJobExecutor(cfg *config.Config, st *store.Store) jobs.BatchScrapeJobExecutor {
+	return &batchScrapeJobExecutor{cfg: cfg, st: st}
+}
+
+func (e *batchScrapeJobExecutor) ExecuteBatchScrapeJob(ctx context.Context, job db.Job) {
+	var req BatchScrapeRequest
+	if err := json.Unmarshal(job.Input, &req); err != nil {
+		msg := "BATCH_SCRAPE_FAILED: invalid batch scrape job input: " + err.Error()
+		_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusFailed), &msg)
+		return
+	}
+
+	_ = e.st.UpdateCrawlJobStatus(context.Background(), job.ID, string(jobs.StatusRunning), nil)
+
+	runBatchScrapeJob(ctx, e.cfg, e.st, job.ID, req)
 }
 
 // runCrawlJob performs the actual crawl for a single job ID using the
@@ -281,7 +230,7 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 	})
 	if err != nil {
 		msg := err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -308,7 +257,7 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 		llmClient, provider, modelName, err = llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 		llmTimeout = timeout
@@ -325,7 +274,6 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 	}
 
 	maxPerJob := cfg.Worker.MaxConcurrentURLsPerJob
-
 	if maxPerJob <= 0 {
 		maxPerJob = 1
 	}
@@ -379,7 +327,6 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 					Timeout:   timeout,
 					UserAgent: cfg.Scraper.UserAgent,
 				})
-
 				if err != nil {
 					return
 				}
@@ -496,7 +443,6 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 						if v, ok := llmRes.Fields["branding"]; ok {
 							if m, ok := v.(map[string]interface{}); ok {
 								scrapeutil.NormalizeBrandingImages(m)
-
 								md.Branding = m
 							} else {
 								md.Branding = map[string]interface{}{"_value": v}
@@ -530,18 +476,18 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 	select {
 	case <-ctx.Done():
 		msg := ctx.Err().Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	case <-doneCh:
 	}
 
 	if atomic.LoadInt32(&successCount) == 0 {
 		msg := "no pages successfully scraped"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
-	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "completed", nil)
+	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusCompleted), nil)
 }
 
 // runMapJob performs a map operation for a map job and stores the
@@ -595,7 +541,7 @@ func runMapJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID u
 	})
 	if err != nil {
 		msg := "MAP_FAILED: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -617,17 +563,17 @@ func runMapJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID u
 	output, err := json.Marshal(out)
 	if err != nil {
 		msg := "MAP_FAILED: failed to marshal map response: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
 	if err := st.SetJobOutput(context.Background(), jobID, output); err != nil {
 		msg := "MAP_FAILED: failed to persist job output: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
-	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "completed", nil)
+	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusCompleted), nil)
 }
 
 // runExtractJob performs a multi-URL extract for an extract job and
@@ -636,13 +582,13 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 	urls := req.URLs
 	if len(urls) == 0 {
 		msg := "EXTRACT_FAILED: no urls provided for extract job"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
 	if len(req.Schema) == 0 {
 		msg := "EXTRACT_FAILED: no schema provided for extract job"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -670,7 +616,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 	if err != nil {
 		metrics.RecordExtractJob("", "", "failed")
 		msg := "LLM_NOT_CONFIGURED: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -737,7 +683,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 				continue
 			}
 			msg := "SCRAPE_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -782,7 +728,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 			}
 
 			msg := "EXTRACT_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -817,7 +763,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 				continue
 			}
 			msg := "EXTRACT_EMPTY_RESULT: LLM did not return any fields"
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -842,7 +788,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 			metrics.RecordExtractResults(string(provider), 0, len(results))
 		}
 		msg := "EXTRACT_EMPTY_RESULT: no URLs produced extracted JSON"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -858,7 +804,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 		metrics.RecordExtractJob(string(provider), modelName, "failed")
 		metrics.RecordExtractResults(string(provider), successCount, len(results)-successCount)
 		msg := "EXTRACT_FAILED: failed to marshal extract result: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -866,14 +812,14 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 		metrics.RecordExtractJob(string(provider), modelName, "failed")
 		metrics.RecordExtractResults(string(provider), successCount, len(results)-successCount)
 		msg := "EXTRACT_FAILED: failed to persist extract result: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
 	metrics.RecordExtractJob(string(provider), modelName, "completed")
 	metrics.RecordExtractResults(string(provider), successCount, len(results)-successCount)
 
-	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "completed", nil)
+	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusCompleted), nil)
 }
 
 // runBatchScrapeJob performs a batch scrape for a fixed list of URLs and
@@ -881,7 +827,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 func runBatchScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID uuid.UUID, req BatchScrapeRequest) {
 	if len(req.URLs) == 0 {
 		msg := "BATCH_SCRAPE_FAILED: no urls provided for batch scrape job"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -957,18 +903,18 @@ func runBatchScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store,
 	select {
 	case <-ctx.Done():
 		msg := ctx.Err().Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	case <-doneCh:
 	}
 
 	if atomic.LoadInt32(&successCount) == 0 {
 		msg := "BATCH_SCRAPE_FAILED: no pages successfully scraped"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
-	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "completed", nil)
+	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusCompleted), nil)
 }
 
 // runScrapeJob performs a single-page scrape for a scrape job and stores
@@ -998,7 +944,7 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		if !cfg.Rod.Enabled {
 			if hasScreenshot {
 				msg := "SCREENSHOT_NOT_AVAILABLE: screenshot format requires browser scraping, but rod is disabled in server configuration"
-				_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+				_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 				return
 			}
 			engine = scraper.NewHTTPScraper(time.Duration(timeoutMs) * time.Millisecond)
@@ -1035,7 +981,7 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	res, err := engine.Scrape(scrapeCtx, scrapeReq)
 	if err != nil {
 		msg := "SCRAPE_FAILED: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -1046,12 +992,12 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	})
 	if err != nil {
 		msg := "SCRAPE_FAILED: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 	if svcRes == nil || svcRes.Document == nil {
 		msg := "SCRAPE_FAILED: empty scrape document"
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
@@ -1066,7 +1012,7 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		shot, err := scraper.CaptureScreenshot(screenshotCtx, res.URL, time.Duration(timeoutMs)*time.Millisecond, screenshotFullPage)
 		if err != nil {
 			msg := "SCREENSHOT_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -1078,17 +1024,15 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		client, provider, modelName, err := llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := "LLM_NOT_CONFIGURED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
-		fieldSpecs := []llm.FieldSpec{
-			{
-				Name:        "summary",
-				Description: "Short natural-language summary of the page content.",
-				Type:        "string",
-			},
-		}
+		fieldSpecs := []llm.FieldSpec{{
+			Name:        "summary",
+			Description: "Short natural-language summary of the page content.",
+			Type:        "string",
+		}}
 
 		llmTimeout := time.Duration(timeoutMs) * time.Millisecond
 		llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
@@ -1105,7 +1049,7 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		if err != nil {
 			metrics.RecordLLMExtract(string(provider), modelName, false)
 			msg := "SUMMARY_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -1120,11 +1064,10 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 
 	// Optional json format using the configured LLM provider when requested.
 	if hasJSON, jsonPrompt, jsonSchema := scrapeutil.GetJSONFormatConfig(req.Formats); hasJSON {
-
 		client, provider, modelName, err := llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := "LLM_NOT_CONFIGURED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -1135,13 +1078,11 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 			}
 		}
 
-		fieldSpecs := []llm.FieldSpec{
-			{
-				Name:        "json",
-				Description: desc,
-				Type:        "object",
-			},
-		}
+		fieldSpecs := []llm.FieldSpec{{
+			Name:        "json",
+			Description: desc,
+			Type:        "object",
+		}}
 
 		llmTimeout := time.Duration(timeoutMs) * time.Millisecond
 		llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
@@ -1155,24 +1096,19 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 			Timeout:  llmTimeout,
 			Strict:   false,
 		})
-
 		if err != nil {
 			metrics.RecordLLMExtract(string(provider), modelName, false)
 			msg := "JSON_EXTRACT_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
 		metrics.RecordLLMExtract(string(provider), modelName, true)
 
 		if v, ok := llmRes.Fields["json"]; ok {
-			// v is expected to be a nested map[string]interface{} representing structured JSON.
 			if m, ok := v.(map[string]interface{}); ok {
 				doc.JSON = m
 			} else {
-				// If the LLM returns a non-object, still expose it as best-effort.
-				// The client can decide how to interpret this.
-				// We wrap it into a single-field object for consistency.
 				doc.JSON = map[string]interface{}{"_value": v}
 			}
 		}
@@ -1180,17 +1116,13 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 
 	// Optional branding format using the configured LLM provider when requested.
 	if hasBranding, brandingPrompt := scrapeutil.GetBrandingFormatConfig(req.Formats); hasBranding {
-
 		client, provider, modelName, err := llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := "LLM_NOT_CONFIGURED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
-		// Default branding prompt modeled after Firecrawl's BrandingProfile,
-		// asking for a structured object with keys like colorScheme, colors,
-		// typography, spacing, components, images, fonts, tone, and personality.
 		if brandingPrompt == "" {
 			brandingPrompt = "You are a brand design expert analyzing a website. Analyze the page and return a single JSON object describing the brand, matching this structure as closely as possible: " +
 				"{colorScheme?: 'light'|'dark', colors?: {primary?: string, secondary?: string, accent?: string, background?: string, textPrimary?: string, textSecondary?: string, link?: string, success?: string, warning?: string, error?: string}, " +
@@ -1202,13 +1134,11 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 
 		descBranding := "Brand identity and design system information (colors, typography, logo, components, personality, etc.) extracted from the page, following Firecrawl's BrandingProfile conventions."
 
-		fieldSpecs := []llm.FieldSpec{
-			{
-				Name:        "branding",
-				Description: descBranding,
-				Type:        "object",
-			},
-		}
+		fieldSpecs := []llm.FieldSpec{{
+			Name:        "branding",
+			Description: descBranding,
+			Type:        "object",
+		}}
 
 		llmTimeout := time.Duration(timeoutMs) * time.Millisecond
 		llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
@@ -1225,7 +1155,7 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		if err != nil {
 			metrics.RecordLLMExtract(string(provider), modelName, false)
 			msg := "BRANDING_FAILED: " + err.Error()
-			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+			_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 			return
 		}
 
@@ -1234,7 +1164,6 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		if v, ok := llmRes.Fields["branding"]; ok {
 			if m, ok := v.(map[string]interface{}); ok {
 				scrapeutil.NormalizeBrandingImages(m)
-
 				doc.Branding = m
 			} else {
 				doc.Branding = map[string]interface{}{"_value": v}
@@ -1245,15 +1174,15 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	output, err := json.Marshal(doc)
 	if err != nil {
 		msg := "SCRAPE_FAILED: failed to marshal document: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
 	if err := st.SetJobOutput(context.Background(), jobID, output); err != nil {
 		msg := "SCRAPE_FAILED: failed to persist job output: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
 
-	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "completed", nil)
+	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusCompleted), nil)
 }

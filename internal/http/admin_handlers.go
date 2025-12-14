@@ -12,6 +12,7 @@ import (
 
 	"raito/internal/config"
 	"raito/internal/db"
+	"raito/internal/jobs"
 	"raito/internal/store"
 )
 
@@ -115,7 +116,7 @@ func adminRetentionCleanupHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	stats := cleanupExpiredData(c.Context(), cfg, st)
+	stats := jobs.CleanupExpiredData(c.Context(), cfg, st)
 
 	return c.Status(fiber.StatusOK).JSON(adminRetentionResponse{
 		Success:          true,

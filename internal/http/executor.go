@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -25,12 +26,19 @@ type WorkExecutor interface {
 // into the database and, for synchronous operations like Scrape, waits
 // for completion before returning the result.
 type JobQueueExecutor struct {
-	cfg *config.Config
-	st  *store.Store
+	cfg    *config.Config
+	st     *store.Store
+	logger *slog.Logger
 }
 
-func NewJobQueueExecutor(cfg *config.Config, st *store.Store) *JobQueueExecutor {
-	return &JobQueueExecutor{cfg: cfg, st: st}
+func NewJobQueueExecutor(cfg *config.Config, st *store.Store, logger *slog.Logger) *JobQueueExecutor {
+	return &JobQueueExecutor{cfg: cfg, st: st, logger: logger}
+}
+
+func (e *JobQueueExecutor) logInfo(msg string, args ...any) {
+	if e.logger != nil {
+		e.logger.Info(msg, args...)
+	}
 }
 
 // Scrape enqueues a scrape job and waits for completion, returning
@@ -77,6 +85,12 @@ func (e *JobQueueExecutor) Scrape(ctx context.Context, req *ScrapeRequest) (*Scr
 		return nil, err
 	}
 
+	e.logInfo("scrape_enqueued",
+		"scrape_id", jobID.String(),
+		"url", req.URL,
+		"has_formats", len(req.Formats) > 0,
+	)
+
 	// Poll for job completion until it is completed/failed or the
 	// context times out.
 	pollInterval := 100 * time.Millisecond
@@ -88,12 +102,24 @@ func (e *JobQueueExecutor) Scrape(ctx context.Context, req *ScrapeRequest) (*Scr
 			// Distinguish between timeout-before-start and timeout-during-run.
 			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
 				if lastStatus == "" || lastStatus == "pending" {
+					e.logInfo("scrape_failed",
+						"scrape_id", jobID.String(),
+						"status", lastStatus,
+						"code", "JOB_NOT_STARTED",
+						"error", "scrape job did not start before timeout",
+					)
 					return &ScrapeResponse{
 						Success: false,
 						Code:    "JOB_NOT_STARTED",
 						Error:   "scrape job did not start before timeout",
 					}, nil
 				}
+				e.logInfo("scrape_failed",
+					"scrape_id", jobID.String(),
+					"status", lastStatus,
+					"code", "SCRAPE_TIMEOUT",
+					"error", "scrape job did not complete before timeout",
+				)
 				return &ScrapeResponse{
 					Success: false,
 					Code:    "SCRAPE_TIMEOUT",
@@ -125,6 +151,11 @@ func (e *JobQueueExecutor) Scrape(ctx context.Context, req *ScrapeRequest) (*Scr
 				return nil, err
 			}
 
+			e.logInfo("scrape_completed",
+				"scrape_id", jobID.String(),
+				"status", job.Status,
+			)
+
 			return &ScrapeResponse{
 				Success: true,
 				Data:    &doc,
@@ -142,6 +173,13 @@ func (e *JobQueueExecutor) Scrape(ctx context.Context, req *ScrapeRequest) (*Scr
 					msg = strings.TrimSpace(msg[idx+1:])
 				}
 			}
+
+			e.logInfo("scrape_failed",
+				"scrape_id", jobID.String(),
+				"status", job.Status,
+				"code", code,
+				"error", msg,
+			)
 
 			return &ScrapeResponse{
 				Success: false,
@@ -194,6 +232,12 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 		return nil, err
 	}
 
+	e.logInfo("map_enqueued",
+		"map_id", jobID.String(),
+		"url", req.URL,
+		"limit", req.Limit,
+	)
+
 	pollInterval := 100 * time.Millisecond
 	lastStatus := ""
 
@@ -202,6 +246,12 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 		case <-waitCtx.Done():
 			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
 				if lastStatus == "" || lastStatus == "pending" {
+					e.logInfo("map_failed",
+						"map_id", jobID.String(),
+						"status", lastStatus,
+						"code", "JOB_NOT_STARTED",
+						"error", "map job did not start before timeout",
+					)
 					return &MapResponse{
 						Success: false,
 						Links:   []MapLink{},
@@ -209,6 +259,12 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 						Error:   "map job did not start before timeout",
 					}, nil
 				}
+				e.logInfo("map_failed",
+					"map_id", jobID.String(),
+					"status", lastStatus,
+					"code", "MAP_TIMEOUT",
+					"error", "map job did not complete before timeout",
+				)
 				return &MapResponse{
 					Success: false,
 					Links:   []MapLink{},
@@ -239,6 +295,12 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 			if err := json.Unmarshal(job.Output.RawMessage, &res); err != nil {
 				return nil, err
 			}
+
+			e.logInfo("map_completed",
+				"map_id", jobID.String(),
+				"status", job.Status,
+			)
+
 			return &res, nil
 		case "failed":
 			code := "MAP_FAILED"
@@ -253,6 +315,13 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 					msg = strings.TrimSpace(msg[idx+1:])
 				}
 			}
+
+			e.logInfo("map_failed",
+				"map_id", jobID.String(),
+				"status", job.Status,
+				"code", code,
+				"error", msg,
+			)
 
 			return &MapResponse{
 				Success: false,
