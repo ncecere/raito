@@ -273,6 +273,15 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 		}
 	}
 
+	var locOpts *scraper.LocationOptions
+	if req.ScrapeOptions != nil && req.ScrapeOptions.Location != nil {
+		loc := req.ScrapeOptions.Location
+		locOpts = &scraper.LocationOptions{
+			Country:   loc.Country,
+			Languages: loc.Languages,
+		}
+	}
+
 	maxPerJob := cfg.Worker.MaxConcurrentURLsPerJob
 	if maxPerJob <= 0 {
 		maxPerJob = 1
@@ -306,27 +315,17 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 				default:
 				}
 
-				// Build per-request headers, including crawl-level scrapeOptions
-				// and any location-derived Accept-Language settings.
-				headers := map[string]string{}
-				for k, v := range scrapeHeaders {
-					headers[k] = v
-				}
-				if req.ScrapeOptions != nil && req.ScrapeOptions.Location != nil {
-					loc := req.ScrapeOptions.Location
-					if len(loc.Languages) > 0 {
-						headers["Accept-Language"] = strings.Join(loc.Languages, ",")
-					} else if loc.Country != "" {
-						headers["Accept-Language"] = loc.Country
-					}
-				}
-
-				res, err := s.Scrape(ctx, scraper.Request{
+				// Build per-request scraper.Request using shared helpers so
+				// headers and Accept-Language behavior are consistent.
+				sReq := scraper.BuildRequestFromOptions(scraper.RequestOptions{
 					URL:       u,
-					Headers:   headers,
-					Timeout:   timeout,
+					Headers:   scrapeHeaders,
+					TimeoutMs: int(timeout.Milliseconds()),
 					UserAgent: cfg.Scraper.UserAgent,
+					Location:  locOpts,
 				})
+
+				res, err := s.Scrape(ctx, sReq)
 				if err != nil {
 					return
 				}
@@ -639,33 +638,32 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 
 	// Derive shared scrape headers from scrapeOptions when provided.
 	baseHeaders := map[string]string{}
+	var locOpts *scraper.LocationOptions
 	if req.ScrapeOptions != nil {
 		for k, v := range req.ScrapeOptions.Headers {
 			baseHeaders[k] = v
 		}
 		if req.ScrapeOptions.Location != nil {
 			loc := req.ScrapeOptions.Location
-			if len(loc.Languages) > 0 {
-				baseHeaders["Accept-Language"] = strings.Join(loc.Languages, ",")
-			} else if loc.Country != "" {
-				baseHeaders["Accept-Language"] = loc.Country
+			locOpts = &scraper.LocationOptions{
+				Country:   loc.Country,
+				Languages: loc.Languages,
 			}
 		}
 	}
 
 	for _, u := range urls {
-		// Scrape the URL first.
-		headers := map[string]string{}
-		for k, v := range baseHeaders {
-			headers[k] = v
-		}
-
-		res, err := s.Scrape(ctx, scraper.Request{
+		// Scrape the URL first using shared RequestOptions to ensure
+		// consistent headers and Accept-Language behavior.
+		sReq := scraper.BuildRequestFromOptions(scraper.RequestOptions{
 			URL:       u,
-			Headers:   headers,
-			Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+			Headers:   baseHeaders,
+			TimeoutMs: timeoutMs,
 			UserAgent: cfg.Scraper.UserAgent,
+			Location:  locOpts,
 		})
+
+		res, err := s.Scrape(ctx, sReq)
 		if err != nil {
 			if ignoreInvalid {
 				results = append(results, map[string]interface{}{

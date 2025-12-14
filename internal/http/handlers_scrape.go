@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -122,25 +121,21 @@ func scrapeHandler(c *fiber.Ctx) error {
 		engine = scraper.NewHTTPScraper(time.Duration(timeoutMs) * time.Millisecond)
 	}
 
-	headers := map[string]string{}
-	for k, v := range reqBody.Headers {
-		headers[k] = v
-	}
-	// Apply location settings to Accept-Language when provided.
+	var locOpts *scraper.LocationOptions
 	if reqBody.Location != nil {
-		if len(reqBody.Location.Languages) > 0 {
-			headers["Accept-Language"] = strings.Join(reqBody.Location.Languages, ",")
-		} else if reqBody.Location.Country != "" {
-			headers["Accept-Language"] = reqBody.Location.Country
+		locOpts = &scraper.LocationOptions{
+			Country:   reqBody.Location.Country,
+			Languages: reqBody.Location.Languages,
 		}
 	}
 
-	scrapeReq := scraper.Request{
+	scrapeReq := scraper.BuildRequestFromOptions(scraper.RequestOptions{
 		URL:       reqBody.URL,
-		Headers:   headers,
-		Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+		Headers:   reqBody.Headers,
+		TimeoutMs: timeoutMs,
 		UserAgent: cfg.Scraper.UserAgent,
-	}
+		Location:  locOpts,
+	})
 
 	ctx, cancel := context.WithTimeout(c.Context(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()

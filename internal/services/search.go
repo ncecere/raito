@@ -230,29 +230,34 @@ func (s *searchService) ScrapeResults(ctx context.Context, base []search.Result,
 			continue
 		}
 
-		headers := map[string]string{}
-		if opts != nil && opts.Headers != nil {
-			for k, v := range opts.Headers {
-				headers[k] = v
-			}
-		}
+		// Build a scraper.Request using shared helpers to keep
+		// headers and Accept-Language behavior consistent.
+		var locOpts *scraper.LocationOptions
 		if opts != nil && opts.Location != nil {
 			loc := opts.Location
-			if len(loc.Languages) > 0 {
-				headers["Accept-Language"] = strings.Join(loc.Languages, ",")
-			} else if loc.Country != "" {
-				headers["Accept-Language"] = loc.Country
+			locOpts = &scraper.LocationOptions{
+				Country:   loc.Country,
+				Languages: loc.Languages,
 			}
 		}
 
-		sReq := scraper.Request{
-			URL:       r.URL,
-			Headers:   headers,
-			Timeout:   dur,
-			UserAgent: s.cfg.Scraper.UserAgent,
+		baseHeaders := map[string]string{}
+		if opts != nil && opts.Headers != nil {
+			for k, v := range opts.Headers {
+				baseHeaders[k] = v
+			}
 		}
 
+		sReq := scraper.BuildRequestFromOptions(scraper.RequestOptions{
+			URL:       r.URL,
+			Headers:   baseHeaders,
+			TimeoutMs: int(dur.Milliseconds()),
+			UserAgent: s.cfg.Scraper.UserAgent,
+			Location:  locOpts,
+		})
+
 		res, err := engine.Scrape(ctx, sReq)
+
 		if err != nil {
 			scrapeErrorCount++
 			if ignoreInvalid {

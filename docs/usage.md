@@ -40,6 +40,8 @@ These are useful for integrating Raito into monitoring systems and for basic rea
 
 For a reference of structured log events (request logs and job-level logs for scrape/map/crawl/batch/extract), see `docs/logging.md`.
 
+**Formats note:** Raito uses a Firecrawl-style `formats` array across endpoints. `/v1/scrape` supports rich formats like `markdown`, `html`, `rawHtml`, `links`, `images`, `summary`, `branding`, `screenshot`, and `json` (via `{type:"json", ...}` objects). `/v1/search` is intentionally restricted to the subset `markdown`, `html`, `rawHtml` for scraped documents to keep payloads small and predictable.
+
 ---
 
 ## /v1/scrape – single-page scrape

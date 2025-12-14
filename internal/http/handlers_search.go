@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"raito/internal/config"
+	"raito/internal/formats"
 	"raito/internal/metrics"
 	"raito/internal/search"
 	"raito/internal/services"
@@ -94,40 +95,12 @@ func searchHandler(c *fiber.Ctx) error {
 	// early so clients get a clear error instead of silently ignored
 	// options or unexpectedly large payloads.
 	if reqBody.ScrapeOptions != nil && len(reqBody.ScrapeOptions.Formats) > 0 {
-		allowed := map[string]struct{}{
-			"markdown": {},
-			"html":     {},
-			"rawhtml":  {},
-		}
-
-		for _, f := range reqBody.ScrapeOptions.Formats {
-			formatName := ""
-			switch v := f.(type) {
-			case string:
-				formatName = strings.ToLower(v)
-			case map[string]interface{}:
-				if t, ok := v["type"].(string); ok {
-					formatName = strings.ToLower(t)
-				}
-			default:
-				// Unknown format shape; treat as unsupported.
-			}
-
-			if formatName == "" {
-				return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
-					Success: false,
-					Code:    "UNSUPPORTED_FORMAT",
-					Error:   "Unsupported format for /v1/search; allowed formats are: markdown, html, rawHtml",
-				})
-			}
-
-			if _, ok := allowed[formatName]; !ok {
-				return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
-					Success: false,
-					Code:    "UNSUPPORTED_FORMAT",
-					Error:   fmt.Sprintf("Unsupported format %q for /v1/search; allowed formats are: markdown, html, rawHtml", formatName),
-				})
-			}
+		if err := formats.ValidateFormatsForEndpoint("search", reqBody.ScrapeOptions.Formats); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "UNSUPPORTED_FORMAT",
+				Error:   err.Error(),
+			})
 		}
 	}
 
