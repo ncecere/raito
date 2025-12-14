@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -36,12 +38,52 @@ func extractHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	// Normalize and validate URLs early to avoid enqueuing obviously
+	// invalid work. Only http/https URLs with a host are accepted.
+	for i, raw := range urls {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
+				Success: false,
+				Code:    "BAD_REQUEST_INVALID_URL",
+				Error:   fmt.Sprintf("Invalid URL at index %d", i),
+			})
+		}
+
+		parsed, err := url.Parse(u)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
+				Success: false,
+				Code:    "BAD_REQUEST_INVALID_URL",
+				Error:   fmt.Sprintf("Invalid URL at index %d", i),
+			})
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
+				Success: false,
+				Code:    "BAD_REQUEST_INVALID_URL",
+				Error:   fmt.Sprintf("Unsupported URL scheme at index %d", i),
+			})
+		}
+
+		urls[i] = u
+	}
+	reqBody.URLs = urls
+
 	// Require a JSON schema; legacy fields mode is no longer supported.
 	if len(reqBody.Schema) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
 			Success: false,
 			Code:    "BAD_REQUEST",
 			Error:   "Missing required field 'schema'",
+		})
+	}
+
+	if code, msg := validateExtractSchema(reqBody.Schema); code != "" {
+		return c.Status(fiber.StatusBadRequest).JSON(ExtractResponse{
+			Success: false,
+			Code:    code,
+			Error:   msg,
 		})
 	}
 
@@ -93,6 +135,36 @@ func extractHandler(c *fiber.Ctx) error {
 		"id":      id.String(),
 		"url":     protocol + "://" + host + "/v1/extract/" + id.String(),
 	})
+}
+
+func validateExtractSchema(schema map[string]interface{}) (string, string) {
+	if len(schema) == 0 {
+		return "INVALID_SCHEMA", "Schema must be a non-empty JSON object"
+	}
+
+	// Guard against excessively large or complex top-level schemas. This is a
+	// coarse limit on the number of top-level keys; nested complexity is still
+	// allowed but bounded at the root.
+	const maxTopLevelKeys = 256
+	if len(schema) > maxTopLevelKeys {
+		return "SCHEMA_TOO_COMPLEX", fmt.Sprintf("Schema has too many top-level keys (max %d)", maxTopLevelKeys)
+	}
+
+	if t, ok := schema["type"]; ok {
+		if ts, ok := t.(string); ok && ts != "" {
+			// Today we only meaningfully support object/array-shaped outputs at
+			// the top level. Reject clearly incompatible primitives while
+			// allowing object/array and omitting "type" entirely.
+			switch ts {
+			case "object", "array":
+				// allowed
+			default:
+				return "INVALID_SCHEMA", "Schema 'type' must be 'object' or 'array' when provided"
+			}
+		}
+	}
+
+	return "", ""
 }
 
 func extractStatusHandler(c *fiber.Ctx) error {

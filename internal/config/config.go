@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -149,4 +152,37 @@ func Load(path string) *Config {
 	}
 
 	return &cfg
+}
+
+// Validate performs basic sanity checks on the loaded configuration.
+// It focuses on LLM defaults so that obviously misconfigured providers
+// fail fast at startup rather than during the first request.
+func (cfg *Config) Validate() error {
+	if cfg == nil {
+		return errors.New("config is nil")
+	}
+
+	provider := strings.TrimSpace(cfg.LLM.DefaultProvider)
+	if provider == "" {
+		return errors.New("llm.defaultProvider must be set to 'openai', 'anthropic', or 'google'")
+	}
+
+	switch provider {
+	case "openai":
+		if cfg.LLM.OpenAI.APIKey == "" || cfg.LLM.OpenAI.Model == "" {
+			return errors.New("openai llm provider is not fully configured")
+		}
+	case "anthropic":
+		if cfg.LLM.Anthropic.APIKey == "" || cfg.LLM.Anthropic.Model == "" {
+			return errors.New("anthropic llm provider is not fully configured")
+		}
+	case "google":
+		if cfg.LLM.Google.APIKey == "" || cfg.LLM.Google.Model == "" {
+			return errors.New("google llm provider is not fully configured")
+		}
+	default:
+		return fmt.Errorf("unsupported llm.defaultProvider: %s", provider)
+	}
+
+	return nil
 }

@@ -24,6 +24,10 @@ func main() {
 
 	cfg := config.Load(*configPath)
 
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
+
 	// Run migrations on a short-lived connection
 	if err := migrate.Run(cfg.Database.DSN); err != nil {
 		log.Fatalf("migrations failed: %v", err)

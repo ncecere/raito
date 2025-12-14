@@ -184,21 +184,16 @@ Golden examples for both modes are in the root `README.md`.
 
 ---
 
-## /v1/extract – LLM-based field extraction
+## /v1/extract – structured JSON extraction
 
-`POST /v1/extract` scrapes a page and uses an LLM to extract structured fields you define.
+`/v1/extract` is an asynchronous endpoint that scrapes one or more URLs and uses an LLM to produce JSON shaped by a caller-provided schema.
 
-Request outline:
+High-level flow:
 
-- `url` – page to extract from.
-- `fields[]` – list of `{ name, description, type }` (where `type` can be `string`, `number`, `boolean`, etc.).
-- `provider` / `model` – optionally override the configured LLM provider and model.
-- `strict` – when `true`, enforces that all fields are present and JSON is valid.
+- `POST /v1/extract` – enqueue a job with `urls[]`, `schema`, optional prompts, and LLM overrides.
+- `GET /v1/extract/:id` – poll job status and retrieve per-URL `results[]` JSON plus optional `sources[]` and `summary` when the job completes.
 
-Responses include:
-
-- `data[0].fields` – structured object with your requested fields.
-- `data[0].raw` – underlying scraped document for debugging.
+For full details on request/response shape, field semantics, and error codes, see `docs/extract.md`.
 
 ---
 

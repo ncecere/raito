@@ -127,14 +127,20 @@ func (e *mapJobExecutor) ExecuteMapJob(ctx context.Context, job db.Job) {
 	runMapJob(ctx, e.cfg, e.st, job.ID, req)
 }
 
+// jobStore is the minimal subset of store.Store used by the extract worker.
+type jobStore interface {
+	UpdateCrawlJobStatus(ctx context.Context, id uuid.UUID, status string, errMsg *string) error
+	SetJobOutput(ctx context.Context, id uuid.UUID, output json.RawMessage) error
+}
+
 // extractJobExecutor implements jobs.ExtractJobExecutor using the existing
 // extract job implementation in this package.
 type extractJobExecutor struct {
 	cfg *config.Config
-	st  *store.Store
+	st  jobStore
 }
 
-func NewExtractJobExecutor(cfg *config.Config, st *store.Store) jobs.ExtractJobExecutor {
+func NewExtractJobExecutor(cfg *config.Config, st jobStore) jobs.ExtractJobExecutor {
 	return &extractJobExecutor{cfg: cfg, st: st}
 }
 
@@ -575,9 +581,41 @@ func runMapJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID u
 	_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusCompleted), nil)
 }
 
+// extractDeps bundles the concrete scraper and LLM client used by the
+// extract worker so tests can inject fakes.
+type extractDeps struct {
+	scraper   scraper.Scraper
+	client    llm.Client
+	provider  llm.Provider
+	modelName string
+	timeout   time.Duration
+}
+
+// newExtractDeps constructs extractDeps from global config and request-level
+// provider/model overrides. Tests can override this variable to supply fakes.
+var newExtractDeps = func(cfg *config.Config, req ExtractRequest) (*extractDeps, error) {
+	timeoutMs := cfg.Scraper.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+
+	client, provider, modelName, err := llm.NewClientFromConfig(cfg, req.Provider, req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	return &extractDeps{
+		scraper:   scraper.NewHTTPScraper(time.Duration(timeoutMs) * time.Millisecond),
+		client:    client,
+		provider:  provider,
+		modelName: modelName,
+		timeout:   time.Duration(timeoutMs) * time.Millisecond,
+	}, nil
+}
+
 // runExtractJob performs a multi-URL extract for an extract job and
 // stores the resulting JSON object into the job's output field.
-func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID uuid.UUID, req ExtractRequest) {
+func runExtractJob(ctx context.Context, cfg *config.Config, st jobStore, jobID uuid.UUID, req ExtractRequest) {
 	urls := req.URLs
 	if len(urls) == 0 {
 		msg := "EXTRACT_FAILED: no urls provided for extract job"
@@ -592,10 +630,16 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 	}
 
 	// Use the scraper timeout for both scraping and LLM operations.
-	timeoutMs := cfg.Scraper.TimeoutMs
-	if timeoutMs <= 0 {
-		timeoutMs = 30000
+	// The concrete scraper and LLM client are constructed via newExtractDeps
+	// so tests can inject fakes.
+	deps, err := newExtractDeps(cfg, req)
+	if err != nil {
+		metrics.RecordExtractJob("", "", "failed")
+		msg := "LLM_NOT_CONFIGURED: " + err.Error()
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
+		return
 	}
+	llmTimeout := deps.timeout
 
 	ignoreInvalid := false
 	if req.IgnoreInvalidURLs != nil {
@@ -607,19 +651,11 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 		showSources = *req.ShowSources
 	}
 
-	// Prepare HTTP scraper (no browser for extract).
-	s := scraper.NewHTTPScraper(time.Duration(timeoutMs) * time.Millisecond)
-
-	// Prepare LLM client.
-	client, provider, modelName, err := llm.NewClientFromConfig(cfg, req.Provider, req.Model)
-	if err != nil {
-		metrics.RecordExtractJob("", "", "failed")
-		msg := "LLM_NOT_CONFIGURED: " + err.Error()
-		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
-		return
-	}
-
-	llmTimeout := time.Duration(timeoutMs) * time.Millisecond
+	// Prepare HTTP scraper (no browser for extract) and LLM client from deps.
+	s := deps.scraper
+	client := deps.client
+	provider := deps.provider
+	modelName := deps.modelName
 
 	// Build a combined prompt including an optional system prompt.
 	buildPrompt := func(userPrompt string) string {
@@ -634,6 +670,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 
 	results := make([]map[string]interface{}, 0, len(urls))
 	sources := make([]map[string]interface{}, 0, len(urls))
+	failedByCode := make(map[string]int)
 	var successCount int
 
 	// Derive shared scrape headers from scrapeOptions when provided.
@@ -658,7 +695,7 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 		sReq := scraper.BuildRequestFromOptions(scraper.RequestOptions{
 			URL:       u,
 			Headers:   baseHeaders,
-			TimeoutMs: timeoutMs,
+			TimeoutMs: int(deps.timeout.Milliseconds()),
 			UserAgent: cfg.Scraper.UserAgent,
 			Location:  locOpts,
 		})
@@ -671,11 +708,12 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 					"success": false,
 					"error":   "SCRAPE_FAILED: " + err.Error(),
 				})
+				failedByCode["SCRAPE_FAILED"]++
 				if showSources {
 					sources = append(sources, map[string]interface{}{
 						"url":        u,
 						"statusCode": 0,
-						"error":      err.Error(),
+						"error":      "SCRAPE_FAILED: " + err.Error(),
 					})
 				}
 				continue
@@ -715,11 +753,12 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 					"success": false,
 					"error":   "EXTRACT_FAILED: " + err.Error(),
 				})
+				failedByCode["EXTRACT_FAILED"]++
 				if showSources {
 					sources = append(sources, map[string]interface{}{
 						"url":        u,
 						"statusCode": res.Status,
-						"error":      err.Error(),
+						"error":      "EXTRACT_FAILED: " + err.Error(),
 					})
 				}
 				continue
@@ -751,11 +790,12 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 					"success": false,
 					"error":   "EXTRACT_EMPTY_RESULT: LLM did not return any fields",
 				})
+				failedByCode["EXTRACT_EMPTY_RESULT"]++
 				if showSources {
 					sources = append(sources, map[string]interface{}{
 						"url":        u,
 						"statusCode": res.Status,
-						"error":      "LLM empty result",
+						"error":      "EXTRACT_EMPTY_RESULT: LLM did not return any fields",
 					})
 				}
 				continue
@@ -784,11 +824,17 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 		metrics.RecordExtractJob(string(provider), modelName, "failed")
 		if len(results) > 0 {
 			metrics.RecordExtractResults(string(provider), 0, len(results))
+			for code, count := range failedByCode {
+				metrics.RecordExtractFailureCode(string(provider), code, count)
+			}
 		}
 		msg := "EXTRACT_EMPTY_RESULT: no URLs produced extracted JSON"
 		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, string(jobs.StatusFailed), &msg)
 		return
 	}
+
+	totalResults := len(results)
+	failedCount := totalResults - successCount
 
 	payload := map[string]interface{}{
 		"results": results,
@@ -796,6 +842,16 @@ func runExtractJob(ctx context.Context, cfg *config.Config, st *store.Store, job
 	if showSources && len(sources) > 0 {
 		payload["sources"] = sources
 	}
+
+	summary := map[string]interface{}{
+		"total":   totalResults,
+		"success": successCount,
+		"failed":  failedCount,
+	}
+	if failedCount > 0 && len(failedByCode) > 0 {
+		summary["failedByCode"] = failedByCode
+	}
+	payload["summary"] = summary
 
 	output, err := json.Marshal(payload)
 	if err != nil {

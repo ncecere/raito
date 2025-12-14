@@ -24,8 +24,9 @@ var (
 	searchResultsTotal        = make(map[string]int64)
 	searchScrapedResultsTotal = make(map[string]int64)
 
-	extractJobsTotal    = make(map[extractJobKey]int64)
-	extractResultsTotal = make(map[extractResultKey]int64)
+	extractJobsTotal         = make(map[extractJobKey]int64)
+	extractResultsTotal      = make(map[extractResultKey]int64)
+	extractFailureCodesTotal = make(map[extractFailureCodeKey]int64)
 )
 
 type reqKey struct {
@@ -59,6 +60,11 @@ type extractJobKey struct {
 type extractResultKey struct {
 	Provider string
 	Outcome  string
+}
+
+type extractFailureCodeKey struct {
+	Provider string
+	Code     string
 }
 
 // RecordRequest increments request counter and records latency.
@@ -159,6 +165,19 @@ func RecordExtractResults(provider string, success, failed int) {
 		key := extractResultKey{Provider: provider, Outcome: "failed"}
 		extractResultsTotal[key] += int64(failed)
 	}
+}
+
+// RecordExtractFailureCode increments counters for extract failures by
+// provider and error code.
+func RecordExtractFailureCode(provider, code string, count int) {
+	if count <= 0 || code == "" {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	key := extractFailureCodeKey{Provider: provider, Code: code}
+	extractFailureCodesTotal[key] += int64(count)
 }
 
 // Export returns Prometheus-style metrics text.
@@ -330,6 +349,26 @@ func Export() string {
 		v := extractResultsTotal[k]
 		fmt.Fprintf(&b, "raito_extract_results_total{provider=\"%s\",outcome=\"%s\"} %d\n",
 			k.Provider, k.Outcome, v)
+	}
+
+	b.WriteString("# HELP raito_extract_failures_by_code_total Total extract failures by provider and error code\n")
+	b.WriteString("# TYPE raito_extract_failures_by_code_total counter\n")
+
+	var extractFailureCodeKeys []extractFailureCodeKey
+	for k := range extractFailureCodesTotal {
+		extractFailureCodeKeys = append(extractFailureCodeKeys, k)
+	}
+	sort.Slice(extractFailureCodeKeys, func(i, j int) bool {
+		if extractFailureCodeKeys[i].Provider != extractFailureCodeKeys[j].Provider {
+			return extractFailureCodeKeys[i].Provider < extractFailureCodeKeys[j].Provider
+		}
+		return extractFailureCodeKeys[i].Code < extractFailureCodeKeys[j].Code
+	})
+
+	for _, k := range extractFailureCodeKeys {
+		v := extractFailureCodesTotal[k]
+		fmt.Fprintf(&b, "raito_extract_failures_by_code_total{provider=\"%s\",code=\"%s\"} %d\n",
+			k.Provider, k.Code, v)
 	}
 
 	// Retention metrics
