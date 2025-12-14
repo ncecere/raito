@@ -13,7 +13,7 @@ import (
 )
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id, created_at, revoked_at FROM api_keys
+SELECT id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id, created_at, revoked_at, user_id FROM api_keys
 WHERE key_hash = $1 AND revoked_at IS NULL
 LIMIT 1
 `
@@ -30,6 +30,7 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, 
 		&i.TenantID,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -37,7 +38,7 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, 
 const insertAPIKey = `-- name: InsertAPIKey :one
 INSERT INTO api_keys (id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id, created_at, revoked_at
+RETURNING id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id, created_at, revoked_at, user_id
 `
 
 type InsertAPIKeyParams struct {
@@ -68,6 +69,57 @@ func (q *Queries) InsertAPIKey(ctx context.Context, arg InsertAPIKeyParams) (Api
 		&i.TenantID,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.UserID,
 	)
 	return i, err
+}
+
+const listAPIKeysByTenant = `-- name: ListAPIKeysByTenant :many
+SELECT id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id, created_at, revoked_at, user_id FROM api_keys
+WHERE tenant_id = $1 AND revoked_at IS NULL
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListAPIKeysByTenant(ctx context.Context, tenantID sql.NullString) ([]ApiKey, error) {
+	rows, err := q.db.QueryContext(ctx, listAPIKeysByTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ApiKey
+	for rows.Next() {
+		var i ApiKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.KeyHash,
+			&i.Label,
+			&i.IsAdmin,
+			&i.RateLimitPerMinute,
+			&i.TenantID,
+			&i.CreatedAt,
+			&i.RevokedAt,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokeAPIKey = `-- name: RevokeAPIKey :exec
+UPDATE api_keys
+SET revoked_at = NOW()
+WHERE id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeAPIKey(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, revokeAPIKey, id)
+	return err
 }

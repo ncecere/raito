@@ -22,6 +22,7 @@ type ApiKey struct {
 	TenantID           sql.NullString
 	CreatedAt          time.Time
 	RevokedAt          sql.NullTime
+	UserID             uuid.NullUUID
 }
 
 type Document struct {
@@ -50,4 +51,36 @@ type Job struct {
 	Priority    int32
 	Sync        bool
 	Output      pqtype.NullRawMessage
+	TenantID    uuid.NullUUID
+}
+
+type Tenant struct {
+	ID          uuid.UUID
+	Slug        string
+	Name        string
+	Type        string
+	OwnerUserID uuid.NullUUID
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type TenantMember struct {
+	TenantID  uuid.UUID
+	UserID    uuid.UUID
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type User struct {
+	ID              uuid.UUID
+	Email           string
+	Name            sql.NullString
+	AuthProvider    string
+	AuthSubject     sql.NullString
+	IsSystemAdmin   bool
+	PasswordHash    sql.NullString
+	PasswordVersion sql.NullInt32
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }

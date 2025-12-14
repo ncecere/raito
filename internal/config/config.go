@@ -43,9 +43,31 @@ type RedisConfig struct {
 	URL string `yaml:"url"`
 }
 
+type LocalAuthConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type OIDCAuthConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	IssuerURL      string   `yaml:"issuerURL"`
+	ClientID       string   `yaml:"clientID"`
+	ClientSecret   string   `yaml:"clientSecret"`
+	RedirectURL    string   `yaml:"redirectURL"`
+	AllowedDomains []string `yaml:"allowedDomains"`
+}
+
+type SessionAuthConfig struct {
+	Secret     string `yaml:"secret"`     // HS256 secret for JWT
+	CookieName string `yaml:"cookieName"` // defaults to "raito_session"
+	TTLMinutes int    `yaml:"ttlMinutes"` // session lifetime; default 1440 (24h)
+}
+
 type AuthConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	InitialAdminKey string `yaml:"initialAdminKey"`
+	Enabled         bool              `yaml:"enabled"`
+	InitialAdminKey string            `yaml:"initialAdminKey"`
+	Local           LocalAuthConfig   `yaml:"local"`
+	OIDC            OIDCAuthConfig    `yaml:"oidc"`
+	Session         SessionAuthConfig `yaml:"session"`
 }
 
 type RateLimitConfig struct {
@@ -123,6 +145,28 @@ type RetentionConfig struct {
 	Documents              DocumentTTLConfig `yaml:"documents"`
 }
 
+type BootstrapUserConfig struct {
+	Email         string `yaml:"email"`
+	Name          string `yaml:"name"`
+	IsSystemAdmin bool   `yaml:"isSystemAdmin"`
+	Provider      string `yaml:"provider"` // local or oidc
+	Password      string `yaml:"password,omitempty"`
+}
+
+type BootstrapTenantConfig struct {
+	Slug    string   `yaml:"slug"`
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"` // personal or org
+	Admins  []string `yaml:"admins"`
+	Members []string `yaml:"members"`
+}
+
+type BootstrapConfig struct {
+	AllowPlaintextPasswords bool                    `yaml:"allowPlaintextPasswords"`
+	Users                   []BootstrapUserConfig   `yaml:"users"`
+	Tenants                 []BootstrapTenantConfig `yaml:"tenants"`
+}
+
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
 	Scraper   ScraperConfig   `yaml:"scraper"`
@@ -137,6 +181,7 @@ type Config struct {
 	LLM       LLMConfig       `yaml:"llm"`
 	Search    SearchConfig    `yaml:"search"`
 	Retention RetentionConfig `yaml:"retention"`
+	Bootstrap BootstrapConfig `yaml:"bootstrap"`
 }
 
 func Load(path string) *Config {
@@ -182,6 +227,26 @@ func (cfg *Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unsupported llm.defaultProvider: %s", provider)
+	}
+
+	// Basic auth validation: ensure OIDC config is complete when enabled.
+	if cfg.Auth.OIDC.Enabled {
+		if strings.TrimSpace(cfg.Auth.OIDC.IssuerURL) == "" ||
+			strings.TrimSpace(cfg.Auth.OIDC.ClientID) == "" ||
+			strings.TrimSpace(cfg.Auth.OIDC.ClientSecret) == "" ||
+			strings.TrimSpace(cfg.Auth.OIDC.RedirectURL) == "" {
+			return errors.New("auth.oidc is enabled but issuerURL, clientID, clientSecret, or redirectURL is missing")
+		}
+	}
+
+	// Prevent accidental plaintext passwords in bootstrap users unless
+	// explicitly allowed in configuration.
+	if !cfg.Bootstrap.AllowPlaintextPasswords {
+		for _, u := range cfg.Bootstrap.Users {
+			if strings.EqualFold(strings.TrimSpace(u.Provider), "local") && strings.TrimSpace(u.Password) != "" {
+				return errors.New("bootstrap users contain plaintext passwords but bootstrap.allowPlaintextPasswords is false")
+			}
+		}
 	}
 
 	return nil

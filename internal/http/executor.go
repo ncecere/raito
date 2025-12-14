@@ -81,7 +81,13 @@ func (e *JobQueueExecutor) Scrape(ctx context.Context, req *ScrapeRequest) (*Scr
 	}()
 
 	// Enqueue the scrape job as a high-priority, synchronous job.
-	if _, err := e.st.CreateJob(waitCtx, jobID, "scrape", req.URL, req, true, 100); err != nil {
+	var tenantID *uuid.UUID
+	if val := ctx.Value("tenant_id"); val != nil {
+		if tid, ok := val.(uuid.UUID); ok {
+			tenantID = &tid
+		}
+	}
+	if _, err := e.st.CreateJob(waitCtx, jobID, "scrape", req.URL, req, true, 100, tenantID); err != nil {
 		return nil, err
 	}
 
@@ -228,7 +234,14 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 		return uuid.New()
 	}()
 
-	if _, err := e.st.CreateJob(waitCtx, jobID, "map", req.URL, req, true, 100); err != nil {
+	var tenantID *uuid.UUID
+	if val := ctx.Value("tenant_id"); val != nil {
+		if tid, ok := val.(uuid.UUID); ok {
+			tenantID = &tid
+		}
+	}
+
+	if _, err := e.st.CreateJob(waitCtx, jobID, "map", req.URL, req, true, 100, tenantID); err != nil {
 		return nil, err
 	}
 
@@ -367,12 +380,19 @@ func (e *JobQueueExecutor) Extract(ctx context.Context, req *ExtractRequest) (*E
 		return uuid.New()
 	}()
 
+	var tenantID *uuid.UUID
+	if val := ctx.Value("tenant_id"); val != nil {
+		if tid, ok := val.(uuid.UUID); ok {
+			tenantID = &tid
+		}
+	}
+
 	primaryURL := ""
 	if len(req.URLs) > 0 {
 		primaryURL = req.URLs[0]
 	}
 
-	if _, err := e.st.CreateJob(waitCtx, jobID, "extract", primaryURL, req, true, 100); err != nil {
+	if _, err := e.st.CreateJob(waitCtx, jobID, "extract", primaryURL, req, true, 100, tenantID); err != nil {
 		return nil, err
 	}
 

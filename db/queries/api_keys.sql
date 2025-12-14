@@ -7,3 +7,13 @@ RETURNING *;
 SELECT * FROM api_keys
 WHERE key_hash = $1 AND revoked_at IS NULL
 LIMIT 1;
+
+-- name: ListAPIKeysByTenant :many
+SELECT * FROM api_keys
+WHERE tenant_id = $1 AND revoked_at IS NULL
+ORDER BY created_at DESC;
+
+-- name: RevokeAPIKey :exec
+UPDATE api_keys
+SET revoked_at = NOW()
+WHERE id = $1 AND revoked_at IS NULL;

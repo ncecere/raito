@@ -42,7 +42,7 @@ func (s *Store) withQueries(ctx context.Context, fn func(ctx context.Context, q 
 }
 
 // CreateJob inserts a new job row with the given parameters.
-func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string, input any, sync bool, priority int32) (db.Job, error) {
+func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string, input any, sync bool, priority int32, tenantID *uuid.UUID) (db.Job, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return db.Job{}, err
@@ -50,6 +50,10 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 
 	var job db.Job
 	err = s.withQueries(ctx, func(ctx context.Context, q *db.Queries) error {
+		var t uuid.NullUUID
+		if tenantID != nil {
+			t = uuid.NullUUID{UUID: *tenantID, Valid: true}
+		}
 		row, err := q.InsertJob(ctx, db.InsertJobParams{
 			ID:       id,
 			Type:     jobType,
@@ -58,6 +62,7 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 			Input:    payload,
 			Sync:     sync,
 			Priority: priority,
+			TenantID: t,
 		})
 		if err != nil {
 			return err
@@ -76,6 +81,7 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 			Priority:    row.Priority,
 			Sync:        row.Sync,
 			Output:      row.Output,
+			TenantID:    row.TenantID,
 		}
 		return nil
 	})
@@ -84,8 +90,8 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 }
 
 // CreateCrawlJob inserts a new crawl job row.
-func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, input any) (db.Job, error) {
-	return s.CreateJob(ctx, id, "crawl", url, input, false, 10)
+func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, input any, tenantID *uuid.UUID) (db.Job, error) {
+	return s.CreateJob(ctx, id, "crawl", url, input, false, 10, tenantID)
 }
 
 // UpdateCrawlJobStatus updates the status and optional error message for a crawl job.
@@ -163,6 +169,7 @@ func (s *Store) GetCrawlJobAndDocuments(ctx context.Context, id uuid.UUID) (db.J
 			Priority:    row.Priority,
 			Sync:        row.Sync,
 			Output:      row.Output,
+			TenantID:    row.TenantID,
 		}
 
 		docs, err = q.GetDocumentsByJobID(ctx, id)
@@ -201,6 +208,7 @@ func (s *Store) ListPendingJobs(ctx context.Context, limit int32) ([]db.Job, err
 				Priority:    row.Priority,
 				Sync:        row.Sync,
 				Output:      row.Output,
+				TenantID:    row.TenantID,
 			})
 		}
 		return nil
@@ -211,11 +219,12 @@ func (s *Store) ListPendingJobs(ctx context.Context, limit int32) ([]db.Job, err
 
 // JobListFilter describes optional filters for listing jobs in admin APIs.
 type JobListFilter struct {
-	Type   string
-	Status string
-	Sync   *bool
-	Limit  int32
-	Offset int32
+	Type     string
+	Status   string
+	Sync     *bool
+	TenantID *uuid.UUID
+	Limit    int32
+	Offset   int32
 }
 
 // ListJobs returns jobs matching the given filter, ordered by created_at desc.
@@ -238,6 +247,11 @@ func (s *Store) ListJobs(ctx context.Context, filter JobListFilter) ([]db.Job, e
 	if filter.Sync != nil {
 		conditions = append(conditions, fmt.Sprintf("sync = $%d", argPos))
 		args = append(args, *filter.Sync)
+		argPos++
+	}
+	if filter.TenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argPos))
+		args = append(args, *filter.TenantID)
 		argPos++
 	}
 
@@ -316,6 +330,7 @@ func (s *Store) GetJobByID(ctx context.Context, id uuid.UUID) (db.Job, error) {
 			Priority:    row.Priority,
 			Sync:        row.Sync,
 			Output:      row.Output,
+			TenantID:    row.TenantID,
 		}
 		return nil
 	})

@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"raito/internal/bootstrap"
 	"raito/internal/config"
 	server "raito/internal/http"
 	"raito/internal/migrate"
@@ -50,6 +51,12 @@ func main() {
 		if _, err := st.EnsureAdminAPIKey(context.Background(), cfg.Auth.InitialAdminKey, "initial-admin"); err != nil {
 			log.Fatalf("ensure admin api key failed: %v", err)
 		}
+	}
+
+	// Apply bootstrap configuration (users, tenants) once DB and store
+	// are available. This is designed to be idempotent.
+	if err := bootstrap.Run(context.Background(), cfg, st); err != nil {
+		log.Fatalf("bootstrap failed: %v", err)
 	}
 
 	// Set up logger
