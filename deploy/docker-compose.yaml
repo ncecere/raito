@@ -42,7 +42,7 @@ services:
   api:
 
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: raito-api:latest
     container_name: raito-api
@@ -60,7 +60,7 @@ services:
 
   worker1:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: raito-api:latest
     container_name: raito-worker-1
@@ -74,7 +74,7 @@ services:
 
   worker2:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: raito-api:latest
     container_name: raito-worker-2

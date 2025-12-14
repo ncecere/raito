@@ -17,6 +17,8 @@ import (
 	"raito/internal/metrics"
 	"raito/internal/model"
 	"raito/internal/scraper"
+	"raito/internal/scrapeutil"
+	"raito/internal/services"
 	"raito/internal/store"
 )
 
@@ -290,9 +292,9 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 	}
 
 	// Determine whether we should compute summaries and/or json/branding for this crawl.
-	wantSummary := wantsFormat(req.Formats, "summary")
-	hasJSON, jsonPrompt, jsonSchema := getJSONFormatConfig(req.Formats)
-	wantBranding, brandingPrompt := getBrandingFormatConfig(req.Formats)
+	wantSummary := scrapeutil.WantsFormat(req.Formats, "summary")
+	hasJSON, jsonPrompt, jsonSchema := scrapeutil.GetJSONFormatConfig(req.Formats)
+	wantBranding, brandingPrompt := scrapeutil.GetBrandingFormatConfig(req.Formats)
 	wantLLM := wantSummary || hasJSON || wantBranding
 
 	var (
@@ -384,9 +386,9 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 
 				engine := res.Engine
 				md := model.Metadata{
-					Title:       toString(res.Metadata["title"]),
-					Description: toString(res.Metadata["description"]),
-					SourceURL:   toString(res.Metadata["sourceURL"]),
+					Title:       scrapeutil.ToString(res.Metadata["title"]),
+					Description: scrapeutil.ToString(res.Metadata["description"]),
+					SourceURL:   scrapeutil.ToString(res.Metadata["sourceURL"]),
 					StatusCode:  res.Status,
 				}
 
@@ -492,8 +494,9 @@ func runCrawlJob(ctx context.Context, cfg *config.Config, st *store.Store, jobID
 					} else {
 						metrics.RecordLLMExtract(string(provider), modelName, true)
 						if v, ok := llmRes.Fields["branding"]; ok {
-							if m, ok2 := v.(map[string]interface{}); ok2 {
-								normalizeBrandingImages(m)
+							if m, ok := v.(map[string]interface{}); ok {
+								scrapeutil.NormalizeBrandingImages(m)
+
 								md.Branding = m
 							} else {
 								md.Branding = map[string]interface{}{"_value": v}
@@ -924,9 +927,9 @@ func runBatchScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store,
 
 				engine := res.Engine
 				md := model.Metadata{
-					Title:       toString(res.Metadata["title"]),
-					Description: toString(res.Metadata["description"]),
-					SourceURL:   toString(res.Metadata["sourceURL"]),
+					Title:       scrapeutil.ToString(res.Metadata["title"]),
+					Description: scrapeutil.ToString(res.Metadata["description"]),
+					SourceURL:   scrapeutil.ToString(res.Metadata["sourceURL"]),
 					StatusCode:  res.Status,
 				}
 
@@ -976,8 +979,6 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	if req.Timeout != nil && *req.Timeout > 0 {
 		timeoutMs = *req.Timeout
 	}
-
-	hasFormats := len(req.Formats) > 0
 
 	// Determine whether screenshot format was requested and its options.
 	hasScreenshot, screenshotFullPage := getScreenshotFormatConfig(req.Formats)
@@ -1038,75 +1039,24 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 		return
 	}
 
-	md := model.Metadata{
-		Title:         toString(res.Metadata["title"]),
-		Description:   toString(res.Metadata["description"]),
-		Language:      toString(res.Metadata["language"]),
-		Keywords:      toString(res.Metadata["keywords"]),
-		Robots:        toString(res.Metadata["robots"]),
-		OgTitle:       toString(res.Metadata["ogTitle"]),
-		OgDescription: toString(res.Metadata["ogDescription"]),
-		OgURL:         toString(res.Metadata["ogUrl"]),
-		OgImage:       toString(res.Metadata["ogImage"]),
-		OgSiteName:    toString(res.Metadata["ogSiteName"]),
-		SourceURL:     toString(res.Metadata["sourceURL"]),
-		StatusCode:    res.Status,
+	svc := services.NewScrapeService(cfg)
+	svcRes, err := svc.Scrape(scrapeCtx, &services.ScrapeRequest{
+		Result:  res,
+		Formats: req.Formats,
+	})
+	if err != nil {
+		msg := "SCRAPE_FAILED: " + err.Error()
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		return
+	}
+	if svcRes == nil || svcRes.Document == nil {
+		msg := "SCRAPE_FAILED: empty scrape document"
+		_ = st.UpdateCrawlJobStatus(context.Background(), jobID, "failed", &msg)
+		return
 	}
 
-	links := res.Links
-	if len(links) > 0 {
-		links = filterLinks(links, res.URL, cfg.Scraper.LinksSameDomainOnly, cfg.Scraper.LinksMaxPerDocument)
-	}
-
-	// Map link metadata to the API model, keeping it aligned with the filtered links.
-	linkSet := make(map[string]struct{}, len(links))
-	for _, l := range links {
-		linkSet[l] = struct{}{}
-	}
-	linkMetadata := make([]LinkMetadata, 0, len(links))
-	for _, lm := range res.LinkMetadata {
-		if _, ok := linkSet[lm.URL]; !ok {
-			continue
-		}
-		linkMetadata = append(linkMetadata, LinkMetadata{
-			URL:  lm.URL,
-			Text: lm.Text,
-			Rel:  lm.Rel,
-		})
-	}
-
-	images := scraper.ExtractImages(res.HTML, res.URL)
-
-	// When formats are provided, only include the requested fields
-	// (plus minimal metadata/engine) to better match Firecrawl semantics.
-
-	includeMarkdown := !hasFormats || wantsFormat(req.Formats, "markdown")
-	includeHTML := !hasFormats || wantsFormat(req.Formats, "html")
-	includeRawHTML := !hasFormats || wantsFormat(req.Formats, "rawHtml")
-	includeLinks := !hasFormats || wantsFormat(req.Formats, "links")
-	includeImages := !hasFormats || wantsFormat(req.Formats, "images")
-
-	doc := &Document{
-		Engine:   res.Engine,
-		Metadata: md,
-	}
-
-	if includeMarkdown {
-		doc.Markdown = res.Markdown
-	}
-	if includeHTML {
-		doc.HTML = res.HTML
-	}
-	if includeRawHTML {
-		doc.RawHTML = res.RawHTML
-	}
-	if includeLinks {
-		doc.Links = links
-		doc.LinkMetadata = linkMetadata
-	}
-	if includeImages {
-		doc.Images = images
-	}
+	doc := (*Document)(svcRes.Document)
+	md := doc.Metadata
 
 	// Optional screenshot format using the browser engine when requested.
 	if hasScreenshot {
@@ -1124,7 +1074,7 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	}
 
 	// Optional summary format using the configured LLM provider when requested.
-	if wantsFormat(req.Formats, "summary") {
+	if scrapeutil.WantsFormat(req.Formats, "summary") {
 		client, provider, modelName, err := llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := "LLM_NOT_CONFIGURED: " + err.Error()
@@ -1169,7 +1119,8 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	}
 
 	// Optional json format using the configured LLM provider when requested.
-	if hasJSON, jsonPrompt, jsonSchema := getJSONFormatConfig(req.Formats); hasJSON {
+	if hasJSON, jsonPrompt, jsonSchema := scrapeutil.GetJSONFormatConfig(req.Formats); hasJSON {
+
 		client, provider, modelName, err := llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := "LLM_NOT_CONFIGURED: " + err.Error()
@@ -1228,7 +1179,8 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 	}
 
 	// Optional branding format using the configured LLM provider when requested.
-	if hasBranding, brandingPrompt := getBrandingFormatConfig(req.Formats); hasBranding {
+	if hasBranding, brandingPrompt := scrapeutil.GetBrandingFormatConfig(req.Formats); hasBranding {
+
 		client, provider, modelName, err := llm.NewClientFromConfig(cfg, "", "")
 		if err != nil {
 			msg := "LLM_NOT_CONFIGURED: " + err.Error()
@@ -1281,7 +1233,8 @@ func runScrapeJob(ctx context.Context, cfg *config.Config, st *store.Store, jobI
 
 		if v, ok := llmRes.Fields["branding"]; ok {
 			if m, ok := v.(map[string]interface{}); ok {
-				normalizeBrandingImages(m)
+				scrapeutil.NormalizeBrandingImages(m)
+
 				doc.Branding = m
 			} else {
 				doc.Branding = map[string]interface{}{"_value": v}

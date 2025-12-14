@@ -15,7 +15,8 @@ This document explains how to set up, run, and use the Raito API locally.
 Inside the `raito/` directory:
 
 - `cmd/raito-api/` – main API server entrypoint
-- `config/config.yaml` – application configuration (local, not committed; see `config/config.example.yaml`)
+- `deploy/` – Docker Compose stack and config (see `docs/deploy.md`)
+- `deploy/config/config.yaml` – default config for the Docker stack (see `deploy/config/config.example.yaml`)
 - `db/migrations/` – goose migrations for Postgres
 - `db/queries/` – sqlc query definitions
 - `internal/config/` – config loading
@@ -25,6 +26,7 @@ Inside the `raito/` directory:
 - `internal/store/` – DB store using sqlc models
 - `internal/llm/` – LLM abstraction (OpenAI, Anthropic, Google)
 - `internal/metrics/` – simple Prometheus-style request/LLM metrics
+- `docs/` – deployment and usage docs (`docs/deploy.md`, `docs/usage.md`)
 
 ## Releases & Docker images
 
@@ -53,7 +55,12 @@ docker run --rm -p 8080:8080 \
 
 ## Configuration
 
-Raito is configured via `config/config.yaml`. The default file looks roughly like this:
+Raito is configured via a YAML file. When running via Docker Compose, the canonical file is `deploy/config/config.yaml`. When running locally with `go run`, you can either:
+
+- Use `deploy/config/config.yaml` and pass `-config deploy/config/config.yaml`, or
+- Create your own `config/config.yaml` and rely on the default `-config config/config.yaml`.
+
+A typical config looks roughly like this:
 
 ```yaml
 server:
@@ -177,10 +184,12 @@ Currently, configuration is loaded directly from YAML; environment variable over
 
 ## Running Postgres and Redis
 
-From the `raito/` directory you can start Postgres and Redis with the provided `docker-compose.yaml`:
+The `deploy/docker-compose.yaml` file includes services for Postgres, Redis, SearxNG, the API, and workers.
+
+To start just Postgres and Redis for local development:
 
 ```bash
-cd raito
+cd raito/deploy
 docker compose up -d postgres redis
 ```
 
@@ -189,11 +198,13 @@ This will:
 - Start Postgres on port 5432 with a `raito` database and `raito` user.
 - Start Redis on port 6379.
 
-Ensure the `database.dsn` and `redis.url` in `config/config.yaml` match these settings.
+Ensure the `database.dsn` and `redis.url` in your config (for example `deploy/config/config.yaml`) match these settings.
+
+For a full stack (including the API and workers), see `docs/deploy.md`.
 
 ### docker-compose.yaml example
 
-The repo includes a minimal `docker-compose.yaml` for local Postgres and Redis:
+The repo includes `deploy/docker-compose.yaml` for local Postgres, Redis, SearxNG, and the API. A minimal excerpt for Postgres and Redis looks like this:
 
 ```yaml
 version: "3.9"
@@ -231,12 +242,14 @@ You can customize this file for your environment (different ports, passwords, et
 
 ## Running the API server
 
-With Postgres and Redis running:
+With Postgres and Redis running (via `deploy/docker-compose.yaml`):
 
 ```bash
 cd raito
-go run ./cmd/raito-api
+go run ./cmd/raito-api -config deploy/config/config.yaml
 ```
+
+You can also run the binary with a different config path using the `-config` flag.
 
 On startup, the server will:
 
@@ -424,9 +437,11 @@ You can extend this by adding more context in handlers (via `c.Locals`) if neede
 
 For local development, the typical workflow is:
 
-1. Start Postgres and Redis via Docker Compose.
-2. Configure `config/config.yaml` for DB, Redis, auth, rod, and LLMs.
-3. Run the API server with `go run ./cmd/raito-api`.
+1. Start Postgres and Redis via Docker Compose (see `docs/deploy.md`).
+2. Configure your config file (for example `deploy/config/config.yaml`) for DB, Redis, auth, rod, and LLMs.
+3. Run the API server with `go run ./cmd/raito-api -config deploy/config/config.yaml`.
 4. Create a user API key via `/admin/api-keys`.
-5. Call `/v1/scrape`, `/v1/map`, `/v1/crawl`, and `/v1/extract` with your user key.
+5. Call `/v1/scrape`, `/v1/map`, `/v1/crawl`, `/v1/batch/scrape`, `/v1/search`, and `/v1/extract` with your user key.
 6. Monitor `/healthz` and `/metrics`, and tail logs for insight into request behavior and LLM usage.
+
+For a detailed overview of the HTTP API, see `docs/usage.md`.

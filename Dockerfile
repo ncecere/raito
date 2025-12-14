@@ -31,7 +31,7 @@ WORKDIR /app
 
 # Copy binary, config, and migrations
 COPY --from=builder /raito-api /app/raito-api
-COPY config /app/config
+COPY deploy/config /app/config
 COPY db /app/db
 
 USER raito
