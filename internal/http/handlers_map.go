@@ -46,8 +46,13 @@ func mapHandler(c *fiber.Ctx) error {
 		if exec, ok := execVal.(WorkExecutor); ok && exec != nil {
 			baseCtx := context.Background()
 			if val := c.Locals("principal"); val != nil {
-				if p, ok := val.(Principal); ok && p.TenantID != nil {
-					baseCtx = context.WithValue(baseCtx, "tenant_id", *p.TenantID)
+				if p, ok := val.(Principal); ok {
+					if p.TenantID != nil {
+						baseCtx = context.WithValue(baseCtx, "tenant_id", *p.TenantID)
+					}
+					if p.APIKeyID != nil {
+						baseCtx = context.WithValue(baseCtx, "api_key_id", *p.APIKeyID)
+					}
 				}
 			}
 

@@ -52,6 +52,7 @@ type Job struct {
 	Sync        bool
 	Output      pqtype.NullRawMessage
 	TenantID    uuid.NullUUID
+	ApiKeyID    uuid.NullUUID
 }
 
 type Tenant struct {

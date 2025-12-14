@@ -16,7 +16,7 @@ import (
 )
 
 const getJobByID = `-- name: GetJobByID :one
-SELECT id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output, tenant_id
+SELECT id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output, tenant_id, api_key_id
 FROM jobs
 WHERE id = $1
 `
@@ -35,6 +35,7 @@ type GetJobByIDRow struct {
 	Priority    int32
 	Output      pqtype.NullRawMessage
 	TenantID    uuid.NullUUID
+	ApiKeyID    uuid.NullUUID
 }
 
 func (q *Queries) GetJobByID(ctx context.Context, id uuid.UUID) (GetJobByIDRow, error) {
@@ -54,14 +55,15 @@ func (q *Queries) GetJobByID(ctx context.Context, id uuid.UUID) (GetJobByIDRow, 
 		&i.Priority,
 		&i.Output,
 		&i.TenantID,
+		&i.ApiKeyID,
 	)
 	return i, err
 }
 
 const insertJob = `-- name: InsertJob :one
-INSERT INTO jobs (id, type, status, url, input, sync, priority, tenant_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output, tenant_id
+INSERT INTO jobs (id, type, status, url, input, sync, priority, tenant_id, api_key_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output, tenant_id, api_key_id
 `
 
 type InsertJobParams struct {
@@ -73,6 +75,7 @@ type InsertJobParams struct {
 	Sync     bool
 	Priority int32
 	TenantID uuid.NullUUID
+	ApiKeyID uuid.NullUUID
 }
 
 type InsertJobRow struct {
@@ -89,6 +92,7 @@ type InsertJobRow struct {
 	Priority    int32
 	Output      pqtype.NullRawMessage
 	TenantID    uuid.NullUUID
+	ApiKeyID    uuid.NullUUID
 }
 
 func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (InsertJobRow, error) {
@@ -101,6 +105,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (InsertJob
 		arg.Sync,
 		arg.Priority,
 		arg.TenantID,
+		arg.ApiKeyID,
 	)
 	var i InsertJobRow
 	err := row.Scan(
@@ -117,12 +122,13 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (InsertJob
 		&i.Priority,
 		&i.Output,
 		&i.TenantID,
+		&i.ApiKeyID,
 	)
 	return i, err
 }
 
 const listPendingJobs = `-- name: ListPendingJobs :many
-SELECT id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output, tenant_id
+SELECT id, type, status, url, input, error, created_at, updated_at, completed_at, sync, priority, output, tenant_id, api_key_id
 FROM jobs
 WHERE status = 'pending'
 ORDER BY priority DESC, created_at ASC
@@ -143,6 +149,7 @@ type ListPendingJobsRow struct {
 	Priority    int32
 	Output      pqtype.NullRawMessage
 	TenantID    uuid.NullUUID
+	ApiKeyID    uuid.NullUUID
 }
 
 func (q *Queries) ListPendingJobs(ctx context.Context, limit int32) ([]ListPendingJobsRow, error) {
@@ -168,6 +175,7 @@ func (q *Queries) ListPendingJobs(ctx context.Context, limit int32) ([]ListPendi
 			&i.Priority,
 			&i.Output,
 			&i.TenantID,
+			&i.ApiKeyID,
 		); err != nil {
 			return nil, err
 		}

@@ -246,6 +246,10 @@ func (s *authService) LoginLocal(ctx context.Context, email, password string) (*
 		return nil, ErrInvalidCredentials
 	}
 
+	if err := s.ensurePersonalTenantForUser(ctx, q, user); err != nil {
+		return nil, err
+	}
+
 	return &LocalAuthResult{User: user, FirstLogin: false}, nil
 }
 

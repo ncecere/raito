@@ -15,6 +15,7 @@ type MeResponse struct {
 	Error          string         `json:"error,omitempty"`
 	User           *MeUser        `json:"user,omitempty"`
 	PersonalTenant *MeTenantBrief `json:"personalTenant,omitempty"`
+	ActiveTenant   *MeTenantBrief `json:"activeTenant,omitempty"`
 }
 
 type MeUser struct {
@@ -27,6 +28,7 @@ type MeTenantBrief struct {
 	ID   string `json:"id"`
 	Slug string `json:"slug"`
 	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
 }
 
 func meHandler(c *fiber.Ctx) error {
@@ -79,6 +81,20 @@ func meHandler(c *fiber.Ctx) error {
 			ID:   pt.ID.String(),
 			Slug: pt.Slug,
 			Name: pt.Name,
+			Type: pt.Type,
+		}
+	}
+
+	var activeTenant *MeTenantBrief
+	if p.TenantID != nil {
+		t, err := q.GetTenantByID(c.Context(), *p.TenantID)
+		if err == nil {
+			activeTenant = &MeTenantBrief{
+				ID:   t.ID.String(),
+				Slug: t.Slug,
+				Name: t.Name,
+				Type: t.Type,
+			}
 		}
 	}
 
@@ -86,5 +102,6 @@ func meHandler(c *fiber.Ctx) error {
 		Success:        true,
 		User:           meUser,
 		PersonalTenant: meTenant,
+		ActiveTenant:   activeTenant,
 	})
 }

@@ -42,7 +42,7 @@ func (s *Store) withQueries(ctx context.Context, fn func(ctx context.Context, q 
 }
 
 // CreateJob inserts a new job row with the given parameters.
-func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string, input any, sync bool, priority int32, tenantID *uuid.UUID) (db.Job, error) {
+func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string, input any, sync bool, priority int32, tenantID, apiKeyID *uuid.UUID) (db.Job, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return db.Job{}, err
@@ -54,6 +54,10 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 		if tenantID != nil {
 			t = uuid.NullUUID{UUID: *tenantID, Valid: true}
 		}
+		var k uuid.NullUUID
+		if apiKeyID != nil {
+			k = uuid.NullUUID{UUID: *apiKeyID, Valid: true}
+		}
 		row, err := q.InsertJob(ctx, db.InsertJobParams{
 			ID:       id,
 			Type:     jobType,
@@ -63,6 +67,7 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 			Sync:     sync,
 			Priority: priority,
 			TenantID: t,
+			ApiKeyID: k,
 		})
 		if err != nil {
 			return err
@@ -82,6 +87,7 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 			Sync:        row.Sync,
 			Output:      row.Output,
 			TenantID:    row.TenantID,
+			ApiKeyID:    row.ApiKeyID,
 		}
 		return nil
 	})
@@ -90,8 +96,8 @@ func (s *Store) CreateJob(ctx context.Context, id uuid.UUID, jobType, url string
 }
 
 // CreateCrawlJob inserts a new crawl job row.
-func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, input any, tenantID *uuid.UUID) (db.Job, error) {
-	return s.CreateJob(ctx, id, "crawl", url, input, false, 10, tenantID)
+func (s *Store) CreateCrawlJob(ctx context.Context, id uuid.UUID, url string, input any, tenantID, apiKeyID *uuid.UUID) (db.Job, error) {
+	return s.CreateJob(ctx, id, "crawl", url, input, false, 10, tenantID, apiKeyID)
 }
 
 // UpdateCrawlJobStatus updates the status and optional error message for a crawl job.
@@ -170,6 +176,7 @@ func (s *Store) GetCrawlJobAndDocuments(ctx context.Context, id uuid.UUID) (db.J
 			Sync:        row.Sync,
 			Output:      row.Output,
 			TenantID:    row.TenantID,
+			ApiKeyID:    row.ApiKeyID,
 		}
 
 		docs, err = q.GetDocumentsByJobID(ctx, id)
@@ -209,6 +216,7 @@ func (s *Store) ListPendingJobs(ctx context.Context, limit int32) ([]db.Job, err
 				Sync:        row.Sync,
 				Output:      row.Output,
 				TenantID:    row.TenantID,
+				ApiKeyID:    row.ApiKeyID,
 			})
 		}
 		return nil
@@ -331,6 +339,7 @@ func (s *Store) GetJobByID(ctx context.Context, id uuid.UUID) (db.Job, error) {
 			Sync:        row.Sync,
 			Output:      row.Output,
 			TenantID:    row.TenantID,
+			ApiKeyID:    row.ApiKeyID,
 		}
 		return nil
 	})

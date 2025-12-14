@@ -87,7 +87,13 @@ func (e *JobQueueExecutor) Scrape(ctx context.Context, req *ScrapeRequest) (*Scr
 			tenantID = &tid
 		}
 	}
-	if _, err := e.st.CreateJob(waitCtx, jobID, "scrape", req.URL, req, true, 100, tenantID); err != nil {
+	var apiKeyID *uuid.UUID
+	if val := ctx.Value("api_key_id"); val != nil {
+		if kid, ok := val.(uuid.UUID); ok {
+			apiKeyID = &kid
+		}
+	}
+	if _, err := e.st.CreateJob(waitCtx, jobID, "scrape", req.URL, req, true, 100, tenantID, apiKeyID); err != nil {
 		return nil, err
 	}
 
@@ -241,7 +247,14 @@ func (e *JobQueueExecutor) Map(ctx context.Context, req *MapRequest) (*MapRespon
 		}
 	}
 
-	if _, err := e.st.CreateJob(waitCtx, jobID, "map", req.URL, req, true, 100, tenantID); err != nil {
+	var apiKeyID *uuid.UUID
+	if val := ctx.Value("api_key_id"); val != nil {
+		if kid, ok := val.(uuid.UUID); ok {
+			apiKeyID = &kid
+		}
+	}
+
+	if _, err := e.st.CreateJob(waitCtx, jobID, "map", req.URL, req, true, 100, tenantID, apiKeyID); err != nil {
 		return nil, err
 	}
 
@@ -392,7 +405,14 @@ func (e *JobQueueExecutor) Extract(ctx context.Context, req *ExtractRequest) (*E
 		primaryURL = req.URLs[0]
 	}
 
-	if _, err := e.st.CreateJob(waitCtx, jobID, "extract", primaryURL, req, true, 100, tenantID); err != nil {
+	var apiKeyID *uuid.UUID
+	if val := ctx.Value("api_key_id"); val != nil {
+		if kid, ok := val.(uuid.UUID); ok {
+			apiKeyID = &kid
+		}
+	}
+
+	if _, err := e.st.CreateJob(waitCtx, jobID, "extract", primaryURL, req, true, 100, tenantID, apiKeyID); err != nil {
 		return nil, err
 	}
 

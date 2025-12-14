@@ -8,6 +8,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -33,6 +34,50 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, 
 		&i.UserID,
 	)
 	return i, err
+}
+
+const getAPIKeyLabelsByIDs = `-- name: GetAPIKeyLabelsByIDs :many
+SELECT id, label
+FROM api_keys
+WHERE id IN ($1)
+`
+
+type GetAPIKeyLabelsByIDsRow struct {
+	ID    uuid.UUID
+	Label string
+}
+
+func (q *Queries) GetAPIKeyLabelsByIDs(ctx context.Context, ids []uuid.UUID) ([]GetAPIKeyLabelsByIDsRow, error) {
+	query := getAPIKeyLabelsByIDs
+	var queryParams []interface{}
+	if len(ids) > 0 {
+		for _, v := range ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAPIKeyLabelsByIDsRow
+	for rows.Next() {
+		var i GetAPIKeyLabelsByIDsRow
+		if err := rows.Scan(&i.ID, &i.Label); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertAPIKey = `-- name: InsertAPIKey :one

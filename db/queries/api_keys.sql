@@ -17,3 +17,8 @@ ORDER BY created_at DESC;
 UPDATE api_keys
 SET revoked_at = NOW()
 WHERE id = $1 AND revoked_at IS NULL;
+
+-- name: GetAPIKeyLabelsByIDs :many
+SELECT id, label
+FROM api_keys
+WHERE id IN (sqlc.slice('ids'));
