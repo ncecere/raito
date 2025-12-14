@@ -1,0 +1,62 @@
+# Example: API-key-only mode (no user sessions)
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  dsn: "postgres://raito:raito@localhost:5432/raito?sslmode=disable"
+
+redis:
+  url: "redis://localhost:6379"
+
+auth:
+  enabled: true
+  initialAdminKey: "change_me_admin_key"  # change in production
+
+  # User auth and sessions disabled – API keys only
+  local:
+    enabled: false
+
+  oidc:
+    enabled: false
+
+  session:
+    secret: ""               # empty => session cookies disabled
+    cookieName: "raito_session"
+    ttlMinutes: 1440
+
+ratelimit:
+  defaultPerMinute: 60
+
+worker:
+  maxConcurrentJobs: 4
+  pollIntervalMs: 2000
+  maxConcurrentURLsPerJob: 1
+  syncJobWaitTimeoutMs: 60000
+
+search:
+  enabled: true
+  provider: "searxng"
+  maxResults: 5
+  timeoutMs: 60000
+  maxConcurrentScrapes: 4
+  searxng:
+    baseURL: "http://searxng:8080"
+    defaultLimit: 5
+    timeoutMs: 10000
+
+retention:
+  enabled: true
+  cleanupIntervalMinutes: 60
+  jobs:
+    defaultDays: 14
+  documents:
+    defaultDays: 30
+
+llm:
+  defaultProvider: "openai"
+  openai:
+    apiKey: "${OPENAI_API_KEY}"
+    baseURL: "https://api.openai.com/v1"
+    model: "gpt-4.1-mini"

@@ -18,6 +18,8 @@ When `auth.enabled` is `true` (the default), all `/v1/*` and `/admin/*` endpoint
 1. Start the API with a config that sets `auth.initialAdminKey`.
 2. Use that value as your admin key to create additional keys via `/admin/api-keys`.
 
+For multi-tenancy and browser sessions (local/OIDC auth, tenants, and tenant-scoped API keys), see `docs/multi-tenancy.md`.
+
 Example (admin creates a user key):
 
 ```bash

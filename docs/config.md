@@ -154,6 +154,18 @@ Controls headless browser scraping.
 - `initialAdminKey` (string)
   - On startup, Raito ensures an admin API key exists with this value.
   - Use it to call `/admin/api-keys` and create proper user keys.
+- `local` block
+  - `enabled` (bool) – toggles `/auth/login` email/password login.
+- `oidc` block
+  - `enabled` (bool) – toggles OIDC login.
+  - `issuerURL` – OIDC issuer URL (e.g. `https://accounts.example.com`).
+  - `clientID`, `clientSecret` – OIDC client credentials.
+  - `redirectURL` – must match the callback route (typically `http://<host>:<port>/auth/oidc/callback`).
+  - `allowedDomains` – optional list of email domains allowed to log in via OIDC; if non-empty, other domains are rejected.
+- `session` block
+  - `secret` – HS256 secret used to sign browser-session JWTs; when empty, session cookies are disabled and only API keys are accepted.
+  - `cookieName` – optional cookie name (default `"raito_session"`).
+  - `ttlMinutes` – session lifetime in minutes (default 1440, i.e. 24 hours).
 
 ### 4.2 `ratelimit`
 

@@ -40,6 +40,7 @@ Start with:
 - `docs/config.md` – how to configure Raito:
   - `config.yaml` structure (`server`, `scraper`, `crawler`, `robots`, `rod`, `database`, `redis`, `auth`, `ratelimit`, `worker`, `search`, `retention`, `llm`).
   - Defaults and example production/local setups.
+- `docs/auth-migration.md` – rollout/migration guide for enabling user auth and multi-tenancy in existing deployments.
 - `docs/logging.md` – structured logging:
   - `request` logs for all HTTP traffic.
   - Job-level events (`*_enqueued`, `*_completed`, `*_failed`) for crawl, batch-scrape, extract, and queued scrape/map.
@@ -50,6 +51,7 @@ Start with:
 Use the per-endpoint docs to understand request/response shapes, parameters, and error codes:
 
 - `docs/usage.md` – high-level overview of all public endpoints and authentication.
+- `docs/multi-tenancy.md` – how auth, tenants, roles, and tenant-scoped API keys/usage work.
 - `docs/scrape.md` – `/v1/scrape` single-page scraping:
   - Formats (`markdown`, `html`, `rawHtml`, `links`, `images`, `summary`, `branding`, `screenshot`, `json`).
   - Engine selection (`useBrowser`, screenshots).
