@@ -137,6 +137,9 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 		return c.SendString(metrics.Export())
 	})
 
+	// Auth endpoints (login/logout/oidc) without API-key auth
+	registerAuthRoutes(app)
+
 	authMw := authMiddleware(cfg, st)
 	var rateMw fiber.Handler
 	if rdb != nil {
@@ -145,7 +148,17 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 		rateMw = func(c *fiber.Ctx) error { return c.Next() }
 	}
 
+	// Session inspection endpoint for browser clients (auth required)
+	app.Get("/auth/session", authMw, rateMw, meHandler)
+
 	v1 := app.Group("/v1", authMw, rateMw)
+	v1.Get("/tenants", listTenantsHandler)
+	v1.Post("/tenants/:id/select", selectTenantHandler)
+	v1.Get("/jobs", jobsListHandler)
+	v1.Get("/jobs/:id", jobDetailHandler)
+	v1.Post("/tenants/:id/api-keys", tenantCreateAPIKeyHandler)
+	v1.Get("/tenants/:id/api-keys", tenantListAPIKeysHandler)
+	v1.Delete("/tenants/:id/api-keys/:keyID", tenantRevokeAPIKeyHandler)
 	registerV1Routes(v1)
 
 	admin := app.Group("/admin", authMw, adminOnlyMiddleware)
@@ -174,4 +187,5 @@ func registerV1Routes(group fiber.Router) {
 	group.Post("/batch/scrape", batchScrapeHandler)
 	group.Get("/batch/scrape/:id", batchScrapeStatusHandler)
 	group.Post("/search", searchHandler)
+	group.Get("/me", meHandler)
 }

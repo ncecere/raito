@@ -53,10 +53,19 @@ func batchScrapeHandler(c *fiber.Ctx) error {
 	primaryURL := reqBody.URLs[0]
 
 	svc := services.NewBatchScrapeService(st)
+
+	var tenantID *uuid.UUID
+	if val := c.Locals("principal"); val != nil {
+		if p, ok := val.(Principal); ok && p.TenantID != nil {
+			tenantID = p.TenantID
+		}
+	}
+
 	if err := svc.Enqueue(c.Context(), &services.BatchScrapeEnqueueRequest{
 		ID:         id,
 		PrimaryURL: primaryURL,
 		Body:       reqBody,
+		TenantID:   tenantID,
 	}); err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(BatchScrapeResponse{
 			Success: false,
@@ -115,6 +124,17 @@ func batchScrapeStatusHandler(c *fiber.Ctx) error {
 			Code:    "BATCH_SCRAPE_JOB_LOOKUP_FAILED",
 			Error:   err.Error(),
 		})
+	}
+
+	// Enforce tenant scoping for non-admin callers.
+	if val := c.Locals("principal"); val != nil {
+		if p, ok := val.(Principal); ok && !p.IsSystemAdmin && job.TenantID.Valid && p.TenantID != nil && job.TenantID.UUID != *p.TenantID {
+			return c.Status(fiber.StatusNotFound).JSON(BatchScrapeResponse{
+				Success: false,
+				Code:    "NOT_FOUND",
+				Error:   "batch scrape job not found",
+			})
+		}
 	}
 
 	resp := BatchScrapeResponse{

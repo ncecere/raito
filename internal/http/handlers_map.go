@@ -44,7 +44,14 @@ func mapHandler(c *fiber.Ctx) error {
 	// nodes remain lightweight and workers perform discovery.
 	if execVal := c.Locals("executor"); execVal != nil {
 		if exec, ok := execVal.(WorkExecutor); ok && exec != nil {
-			ctx, cancel := context.WithTimeout(c.Context(), time.Duration(timeoutMs)*time.Millisecond)
+			baseCtx := context.Background()
+			if val := c.Locals("principal"); val != nil {
+				if p, ok := val.(Principal); ok && p.TenantID != nil {
+					baseCtx = context.WithValue(baseCtx, "tenant_id", *p.TenantID)
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(baseCtx, time.Duration(timeoutMs)*time.Millisecond)
 			defer cancel()
 
 			res, err := exec.Map(ctx, &reqBody)

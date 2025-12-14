@@ -100,10 +100,19 @@ func extractHandler(c *fiber.Ctx) error {
 	primaryURL := urls[0]
 
 	svc := services.NewExtractService(st)
+
+	var tenantID *uuid.UUID
+	if val := c.Locals("principal"); val != nil {
+		if p, ok := val.(Principal); ok && p.TenantID != nil {
+			tenantID = p.TenantID
+		}
+	}
+
 	if err := svc.Enqueue(c.Context(), &services.ExtractRequest{
 		ID:         id,
 		Body:       reqBody,
 		PrimaryURL: primaryURL,
+		TenantID:   tenantID,
 	}); err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(ExtractResponse{
 			Success: false,
@@ -197,6 +206,19 @@ func extractStatusHandler(c *fiber.Ctx) error {
 			Code:    "EXTRACT_JOB_LOOKUP_FAILED",
 			Error:   err.Error(),
 		})
+	}
+
+	// Enforce tenant scoping: if the job is associated with a tenant,
+	// non-admin callers must match that tenant.
+	if val := c.Locals("principal"); val != nil {
+		if p, ok := val.(Principal); ok && !p.IsSystemAdmin && job.TenantID.Valid && p.TenantID != nil && job.TenantID.UUID != *p.TenantID {
+			return c.Status(fiber.StatusNotFound).JSON(ExtractStatusResponse{
+				Success: false,
+				Status:  ExtractStatusFailed,
+				Code:    "NOT_FOUND",
+				Error:   "extract job not found",
+			})
+		}
 	}
 
 	resp := ExtractStatusResponse{

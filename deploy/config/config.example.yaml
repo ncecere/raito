@@ -1,3 +1,9 @@
+# Canonical example config showing all knobs. For simpler starting points,
+# see:
+# - config.api-keys-only.yaml – API-key-only mode (no user sessions)
+# - config.local-auth.yaml   – local auth + sessions
+# - config.oidc-auth.yaml    – OIDC auth + sessions
+
 server:
   host: "0.0.0.0"
   port: 8080
@@ -27,6 +33,20 @@ redis:
 auth:
   enabled: true
   initialAdminKey: "change_me_admin_key"
+  local:
+    enabled: true
+  oidc:
+    enabled: false
+    issuerURL: "https://accounts.example.com"   # e.g. your IdP issuer URL
+    clientID: "raito-example-client-id"
+    clientSecret: "raito-example-client-secret"
+    redirectURL: "http://localhost:8080/auth/oidc/callback"
+    allowedDomains:
+      - "example.com"
+  session:
+    secret: "change_me_session_secret"          # HS256 secret for JWT
+    cookieName: "raito_session"                 # optional; default "raito_session"
+    ttlMinutes: 1440                             # 24h
 
 ratelimit:
   defaultPerMinute: 60
@@ -73,3 +93,19 @@ llm:
   google:
     apiKey: "${GOOGLE_API_KEY}"
     model: "gemini-1.5-flash"
+
+bootstrap:
+  allowPlaintextPasswords: true           # dev-only; blocks local passwords if false
+  users:
+    - email: "dev-admin@example.com"
+      name: "Dev Admin"
+      isSystemAdmin: true
+      provider: "local"
+      password: "dev-only-password"      # ok because allowPlaintextPasswords: true
+  tenants:
+    - slug: "acme"
+      name: "Acme Corp"
+      type: "org"
+      admins:
+        - "dev-admin@example.com"
+      members: []

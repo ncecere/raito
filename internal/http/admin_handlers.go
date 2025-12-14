@@ -37,6 +37,7 @@ type AdminJob struct {
 	CreatedAt   time.Time       `json:"createdAt"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
 	CompletedAt *time.Time      `json:"completedAt,omitempty"`
+	TenantID    string          `json:"tenantId,omitempty"`
 	Error       string          `json:"error,omitempty"`
 	Output      json.RawMessage `json:"output,omitempty"`
 }
@@ -60,6 +61,15 @@ type adminRetentionResponse struct {
 // registerAdminRoutes registers admin-only endpoints under /admin.
 func registerAdminRoutes(group fiber.Router) {
 	group.Post("/api-keys", adminCreateAPIKeyHandler)
+
+	group.Post("/tenants", adminCreateTenantHandler)
+	group.Get("/tenants", adminListTenantsHandler)
+	group.Get("/tenants/:id", adminGetTenantHandler)
+	group.Patch("/tenants/:id", adminUpdateTenantHandler)
+	group.Post("/tenants/:id/members", adminAddTenantMemberHandler)
+	group.Patch("/tenants/:id/members/:userID", adminUpdateTenantMemberHandler)
+	group.Delete("/tenants/:id/members/:userID", adminRemoveTenantMemberHandler)
+
 	group.Get("/jobs/:id", adminGetJobHandler)
 	group.Get("/jobs", adminListJobsHandler)
 	group.Post("/retention/cleanup", adminRetentionCleanupHandler)
@@ -170,6 +180,19 @@ func adminListJobsHandler(c *fiber.Ctx) error {
 	jobType := c.Query("type")
 	status := c.Query("status")
 
+	var tenantID *uuid.UUID
+	if v := c.Query("tenantId"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid tenantId value",
+			})
+		}
+		tenantID = &id
+	}
+
 	var syncFilter *bool
 	if syncStr := c.Query("sync"); syncStr != "" {
 		val, err := strconv.ParseBool(syncStr)
@@ -213,11 +236,12 @@ func adminListJobsHandler(c *fiber.Ctx) error {
 	}
 
 	jobs, err := st.ListJobs(c.Context(), store.JobListFilter{
-		Type:   jobType,
-		Status: status,
-		Sync:   syncFilter,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Type:     jobType,
+		Status:   status,
+		Sync:     syncFilter,
+		TenantID: tenantID,
+		Limit:    int32(limit),
+		Offset:   int32(offset),
 	})
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
@@ -257,6 +281,11 @@ func marshalAdminJob(job db.Job, includeOutput bool) AdminJob {
 		errMsg = job.Error.String
 	}
 
+	var tenantID string
+	if job.TenantID.Valid {
+		tenantID = job.TenantID.UUID.String()
+	}
+
 	return AdminJob{
 		ID:          job.ID.String(),
 		Type:        job.Type,
@@ -267,6 +296,7 @@ func marshalAdminJob(job db.Job, includeOutput bool) AdminJob {
 		CreatedAt:   job.CreatedAt,
 		UpdatedAt:   job.UpdatedAt,
 		CompletedAt: completedAt,
+		TenantID:    tenantID,
 		Error:       errMsg,
 		Output:      output,
 	}

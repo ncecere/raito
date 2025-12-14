@@ -44,10 +44,19 @@ func crawlHandler(c *fiber.Ctx) error {
 	}()
 
 	svc := services.NewCrawlService(st)
+
+	var tenantID *uuid.UUID
+	if val := c.Locals("principal"); val != nil {
+		if p, ok := val.(Principal); ok && p.TenantID != nil {
+			tenantID = p.TenantID
+		}
+	}
+
 	if err := svc.Enqueue(c.Context(), &services.CrawlEnqueueRequest{
-		ID:   id,
-		URL:  reqBody.URL,
-		Body: reqBody,
+		ID:       id,
+		URL:      reqBody.URL,
+		Body:     reqBody,
+		TenantID: tenantID,
 	}); err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(CrawlResponse{
 			Success: false,
@@ -111,6 +120,17 @@ func crawlStatusHandler(c *fiber.Ctx) error {
 			Code:    "CRAWL_JOB_LOOKUP_FAILED",
 			Error:   err.Error(),
 		})
+	}
+
+	// Enforce tenant scoping for non-admin callers.
+	if val := c.Locals("principal"); val != nil {
+		if p, ok := val.(Principal); ok && !p.IsSystemAdmin && job.TenantID.Valid && p.TenantID != nil && job.TenantID.UUID != *p.TenantID {
+			return c.Status(fiber.StatusNotFound).JSON(CrawlResponse{
+				Success: false,
+				Code:    "NOT_FOUND",
+				Error:   "crawl job not found",
+			})
+		}
 	}
 
 	resp := CrawlResponse{

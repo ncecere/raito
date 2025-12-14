@@ -7,89 +7,122 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"raito/internal/config"
 	"raito/internal/db"
 	"raito/internal/store"
 )
 
-// authMiddleware validates the Authorization: Bearer <key> header and
-// attaches the resolved API key to the context as "apiKey".
+// authMiddleware validates either an API key (Authorization: Bearer
+// raito_...) or a browser session cookie (JWT) and attaches a Principal
+// to the context. API keys remain the primary mechanism for automation.
 func authMiddleware(cfg *config.Config, st *store.Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if !cfg.Auth.Enabled {
 			return c.Next()
 		}
 
+		// First, prefer API keys for automation.
 		rawAuth := c.Get("Authorization")
-		if rawAuth == "" || !strings.HasPrefix(rawAuth, "Bearer ") {
-			return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
-				Success: false,
-				Code:    "UNAUTHENTICATED",
-				Error:   "Missing Authorization Bearer token",
-			})
-		}
-
-		token := strings.TrimSpace(strings.TrimPrefix(rawAuth, "Bearer "))
-		if token == "" || !strings.HasPrefix(token, "raito_") {
-			return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
-				Success: false,
-				Code:    "UNAUTHENTICATED",
-				Error:   "Invalid API key format",
-			})
-		}
-
-		apiKey, err := st.GetAPIKeyByRawKey(c.Context(), token)
-		if err != nil {
-			if err == sql.ErrNoRows {
+		if rawAuth != "" && strings.HasPrefix(rawAuth, "Bearer ") {
+			token := strings.TrimSpace(strings.TrimPrefix(rawAuth, "Bearer "))
+			if token == "" || !strings.HasPrefix(token, "raito_") {
 				return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
 					Success: false,
 					Code:    "UNAUTHENTICATED",
-					Error:   "Invalid or revoked API key",
+					Error:   "Invalid API key format",
 				})
 			}
-			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+
+			apiKey, err := st.GetAPIKeyByRawKey(c.Context(), token)
+			if err != nil {
+				if err == sql.ErrNoRows {
+					return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
+						Success: false,
+						Code:    "UNAUTHENTICATED",
+						Error:   "Invalid or revoked API key",
+					})
+				}
+				return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+					Success: false,
+					Code:    "INTERNAL_ERROR",
+					Error:   fmt.Sprintf("API key lookup failed: %v", err),
+				})
+			}
+
+			c.Locals("apiKey", apiKey)
+			p := principalFromAPIKey(apiKey)
+			c.Locals("principal", p)
+			return c.Next()
+		}
+
+		// Otherwise, try browser session cookie.
+		claims, err := parseSessionFromRequest(c, cfg)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
 				Success: false,
-				Code:    "INTERNAL_ERROR",
-				Error:   fmt.Sprintf("API key lookup failed: %v", err),
+				Code:    "UNAUTHENTICATED",
+				Error:   "Missing or invalid authentication (API key or session)",
 			})
 		}
 
-		c.Locals("apiKey", apiKey)
+		// Build a Principal from session claims.
+		p := Principal{}
+		if claims.UserID != "" {
+			if uid, parseErr := uuid.Parse(claims.UserID); parseErr == nil {
+				p.UserID = &uid
+			}
+		}
+		if claims.TenantID != "" {
+			if tid, parseErr := uuid.Parse(claims.TenantID); parseErr == nil {
+				p.TenantID = &tid
+			}
+		}
+		p.IsSystemAdmin = claims.IsSystemAdmin
+
+		c.Locals("principal", p)
 		return c.Next()
 	}
 }
 
 // rateLimitMiddleware enforces a simple per-minute fixed-window rate limit
-// per API key using Redis.
+// per API key using Redis. For browser sessions, it falls back to a
+// per-user limit keyed by user ID when available.
 func rateLimitMiddleware(cfg *config.Config, rdb *redis.Client) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if !cfg.Auth.Enabled || cfg.RateLimit.DefaultPerMinute <= 0 {
 			return c.Next()
 		}
 
-		val := c.Locals("apiKey")
-		apiKey, ok := val.(db.ApiKey)
-		if !ok {
-			// If there's no apiKey in context, auth should have failed already.
-			return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
-				Success: false,
-				Code:    "UNAUTHENTICATED",
-				Error:   "API key not found in context",
-			})
+		limit := cfg.RateLimit.DefaultPerMinute
+		var bucketID string
+
+		if val := c.Locals("apiKey"); val != nil {
+			if apiKey, ok := val.(db.ApiKey); ok {
+				if apiKey.RateLimitPerMinute.Valid && apiKey.RateLimitPerMinute.Int32 > 0 {
+					limit = int(apiKey.RateLimitPerMinute.Int32)
+				}
+				bucketID = apiKey.ID.String()
+			}
 		}
 
-		limit := cfg.RateLimit.DefaultPerMinute
-		if apiKey.RateLimitPerMinute.Valid && apiKey.RateLimitPerMinute.Int32 > 0 {
-			limit = int(apiKey.RateLimitPerMinute.Int32)
+		if bucketID == "" {
+			// Fall back to per-user bucket for session-based access.
+			if val := c.Locals("principal"); val != nil {
+				if p, ok := val.(Principal); ok && p.UserID != nil {
+					bucketID = p.UserID.String()
+				}
+			}
 		}
-		if limit <= 0 {
+
+		if bucketID == "" || limit <= 0 {
 			return c.Next()
 		}
 
 		now := time.Now().UTC()
 		window := now.Format("200601021504") // YYYYMMDDHHMM minute window
-		key := fmt.Sprintf("raito:rl:%s:%s", apiKey.ID.String(), window)
+		key := fmt.Sprintf("raito:rl:%s:%s", bucketID, window)
 
 		ctx := c.Context()
 		count, err := rdb.Incr(ctx, key).Result()
@@ -117,19 +150,19 @@ func rateLimitMiddleware(cfg *config.Config, rdb *redis.Client) fiber.Handler {
 	}
 }
 
-// adminOnlyMiddleware ensures the current API key has admin privileges.
+// adminOnlyMiddleware ensures the current principal has system admin privileges.
 func adminOnlyMiddleware(c *fiber.Ctx) error {
-	val := c.Locals("apiKey")
-	apiKey, ok := val.(db.ApiKey)
+	val := c.Locals("principal")
+	p, ok := val.(Principal)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
 			Success: false,
 			Code:    "UNAUTHENTICATED",
-			Error:   "API key not found in context",
+			Error:   "Principal not found in context",
 		})
 	}
 
-	if !apiKey.IsAdmin {
+	if !p.IsSystemAdmin {
 		return c.Status(fiber.StatusForbidden).JSON(ErrorResponse{
 			Success: false,
 			Code:    "FORBIDDEN",

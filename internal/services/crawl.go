@@ -12,9 +12,10 @@ import (
 // a crawl job. The Body field is serialized as the job's input payload
 // (typically a CrawlRequest DTO from the HTTP layer).
 type CrawlEnqueueRequest struct {
-	ID   uuid.UUID
-	URL  string
-	Body interface{}
+	ID       uuid.UUID
+	URL      string
+	Body     interface{}
+	TenantID *uuid.UUID
 }
 
 // CrawlService encapsulates the persistence of crawl jobs so HTTP
@@ -35,6 +36,6 @@ func (s *crawlService) Enqueue(ctx context.Context, req *CrawlEnqueueRequest) er
 	if req == nil {
 		return nil
 	}
-	_, err := s.st.CreateCrawlJob(ctx, req.ID, req.URL, req.Body)
+	_, err := s.st.CreateCrawlJob(ctx, req.ID, req.URL, req.Body, req.TenantID)
 	return err
 }
