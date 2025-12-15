@@ -193,6 +193,17 @@ func adminCreateTenantHandler(c *fiber.Ctx) error {
 		out.DefaultAPIKeyRateLimitPerMinute = &v
 	}
 
+	recordAuditEvent(c, st, "admin.tenant.create", auditEventOptions{
+		TenantID:     &tenant.ID,
+		ResourceType: "tenant",
+		ResourceID:   tenant.ID.String(),
+		Metadata: map[string]any{
+			"name": out.Name,
+			"slug": out.Slug,
+			"type": out.Type,
+		},
+	})
+
 	return c.Status(fiber.StatusOK).JSON(AdminTenantResponse{
 		Success: true,
 		Tenant:  &out,
@@ -434,6 +445,16 @@ func adminUpdateTenantHandler(c *fiber.Ctx) error {
 		item.DefaultAPIKeyRateLimitPerMinute = &v
 	}
 
+	recordAuditEvent(c, st, "admin.tenant.update", auditEventOptions{
+		TenantID:     &t.ID,
+		ResourceType: "tenant",
+		ResourceID:   t.ID.String(),
+		Metadata: map[string]any{
+			"name": item.Name,
+			"slug": item.Slug,
+		},
+	})
+
 	return c.Status(fiber.StatusOK).JSON(AdminTenantResponse{
 		Success: true,
 		Tenant:  &item,
@@ -597,6 +618,15 @@ func adminAddTenantMemberHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	recordAuditEvent(c, st, "admin.tenant.member.add", auditEventOptions{
+		TenantID:     &tenantID,
+		ResourceType: "tenant_member",
+		ResourceID:   userID.String(),
+		Metadata: map[string]any{
+			"role": role,
+		},
+	})
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"success": true,
 	})
@@ -664,6 +694,15 @@ func adminUpdateTenantMemberHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	recordAuditEvent(c, st, "admin.tenant.member.update", auditEventOptions{
+		TenantID:     &tenantID,
+		ResourceType: "tenant_member",
+		ResourceID:   userID.String(),
+		Metadata: map[string]any{
+			"role": role,
+		},
+	})
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"success": true,
 	})
@@ -704,6 +743,12 @@ func adminRemoveTenantMemberHandler(c *fiber.Ctx) error {
 			Error:   err.Error(),
 		})
 	}
+
+	recordAuditEvent(c, st, "admin.tenant.member.remove", auditEventOptions{
+		TenantID:     &tenantID,
+		ResourceType: "tenant_member",
+		ResourceID:   userID.String(),
+	})
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"success": true,

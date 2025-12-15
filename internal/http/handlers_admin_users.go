@@ -206,6 +206,16 @@ func adminCreateUserHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	recordAuditEvent(c, st, "admin.user.create", auditEventOptions{
+		TenantID:     &tenantID,
+		ResourceType: "user",
+		ResourceID:   user.ID.String(),
+		Metadata: map[string]any{
+			"email":         user.Email,
+			"isSystemAdmin": user.IsSystemAdmin,
+		},
+	})
+
 	return c.Status(fiber.StatusOK).JSON(adminUserResponse{
 		Success: true,
 		User:    marshalAdminUser(user),
@@ -295,6 +305,14 @@ func adminResetUserPasswordHandler(c *fiber.Ctx) error {
 			Error:   err.Error(),
 		})
 	}
+
+	recordAuditEvent(c, st, "admin.user.reset_password", auditEventOptions{
+		ResourceType: "user",
+		ResourceID:   updated.ID.String(),
+		Metadata: map[string]any{
+			"email": updated.Email,
+		},
+	})
 
 	return c.Status(fiber.StatusOK).JSON(adminUserResponse{
 		Success: true,
@@ -513,6 +531,16 @@ func adminUpdateUserHandler(c *fiber.Ctx) error {
 			Error:   err.Error(),
 		})
 	}
+
+	recordAuditEvent(c, st, "admin.user.update", auditEventOptions{
+		ResourceType: "user",
+		ResourceID:   updated.ID.String(),
+		Metadata: map[string]any{
+			"email":         updated.Email,
+			"isSystemAdmin": updated.IsSystemAdmin,
+			"isDisabled":    updated.IsDisabled,
+		},
+	})
 
 	return c.Status(fiber.StatusOK).JSON(adminUserResponse{
 		Success: true,

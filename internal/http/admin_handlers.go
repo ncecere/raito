@@ -64,6 +64,7 @@ func registerAdminRoutes(group fiber.Router) {
 	group.Get("/api-keys", adminListAPIKeysHandler)
 	group.Delete("/api-keys/:id", adminRevokeAPIKeyHandler)
 	group.Get("/usage", adminUsageHandler)
+	group.Get("/audit", adminListAuditEventsHandler)
 
 	group.Post("/users", adminCreateUserHandler)
 	group.Get("/users", adminListUsersHandler)

@@ -207,6 +207,11 @@ func adminRevokeAPIKeyHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	recordAuditEvent(c, st, "admin.api_key.revoke", auditEventOptions{
+		ResourceType: "api_key",
+		ResourceID:   row.ID.String(),
+	})
+
 	return c.Status(fiber.StatusOK).JSON(adminRevokeAPIKeyResponse{
 		Success:   true,
 		ID:        row.ID.String(),

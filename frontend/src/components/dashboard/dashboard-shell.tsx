@@ -11,6 +11,7 @@ import { AdminUsersPanel } from "@/components/dashboard/admin-users-panel"
 import { AdminTenantsPanel } from "@/components/dashboard/admin-tenants-panel"
 import { AdminAPIKeysPanel } from "@/components/dashboard/admin-api-keys-panel"
 import { AdminUsagePanel } from "@/components/dashboard/admin-usage-panel"
+import { AdminAuditPanel } from "@/components/dashboard/admin-audit-panel"
 import { ProfilePanel } from "@/components/dashboard/profile-panel"
 import { UsagePanel } from "@/components/dashboard/usage-panel"
 import { Button } from "@/components/ui/button"
@@ -437,6 +438,8 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
             <AdminAPIKeysPanel />
           ) : section === "adminUsage" ? (
             <AdminUsagePanel />
+          ) : section === "adminAudit" ? (
+            <AdminAuditPanel />
           ) : (
             <ComingSoonPanel title={activeSection.title} description={activeSection.description} />
           )}

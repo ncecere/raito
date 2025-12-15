@@ -25,6 +25,20 @@ type ApiKey struct {
 	UserID             uuid.NullUUID
 }
 
+type AuditEvent struct {
+	ID            int64
+	CreatedAt     time.Time
+	Action        string
+	ActorUserID   uuid.NullUUID
+	ActorApiKeyID uuid.NullUUID
+	TenantID      uuid.NullUUID
+	ResourceType  sql.NullString
+	ResourceID    sql.NullString
+	Ip            sql.NullString
+	UserAgent     sql.NullString
+	Metadata      json.RawMessage
+}
+
 type Document struct {
 	ID         int64
 	JobID      uuid.UUID
