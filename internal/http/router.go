@@ -156,6 +156,8 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 	v1.Post("/tenants/:id/select", selectTenantHandler)
 	v1.Get("/jobs", jobsListHandler)
 	v1.Get("/jobs/:id", jobDetailHandler)
+	v1.Delete("/jobs/:id", jobDeleteHandler)
+	v1.Get("/jobs/:id/download", jobDownloadHandler)
 	v1.Post("/tenants/:id/api-keys", tenantCreateAPIKeyHandler)
 	v1.Get("/tenants/:id/api-keys", tenantListAPIKeysHandler)
 	v1.Delete("/tenants/:id/api-keys/:keyID", tenantRevokeAPIKeyHandler)

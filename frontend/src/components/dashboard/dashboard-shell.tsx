@@ -686,6 +686,7 @@ interface JobListItem {
 
 interface JobDetailItem extends JobListItem {
   error?: string
+  formats?: string[]
 }
 
 function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
@@ -693,6 +694,8 @@ function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [deletingJobId, setDeletingJobId] = useState<string | null>(null)
+  const [downloadingJobId, setDownloadingJobId] = useState<string | null>(null)
 
   const [typeFilter, setTypeFilter] = useState("")
   const [statusFilter, setStatusFilter] = useState("")
@@ -852,6 +855,70 @@ function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
       return job.apiKeyLabel || "Unknown key"
     }
     return `Web UI (${sessionEmail})`
+  }
+
+  function filenameFromContentDisposition(headerValue: string | null): string | null {
+    if (!headerValue) return null
+    const match = headerValue.match(/filename="([^"]+)"/i)
+    return match?.[1] ?? null
+  }
+
+  async function downloadJob(job: JobListItem) {
+    setDownloadingJobId(job.id)
+    try {
+      const res = await fetch(`/v1/jobs/${job.id}/download`)
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        setError(data?.error || "Unable to download job output")
+        return
+      }
+
+      const filename =
+        filenameFromContentDisposition(res.headers.get("content-disposition")) ||
+        `job-${job.id}.bin`
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch {
+      setError("Network error while downloading job output")
+    } finally {
+      setDownloadingJobId(null)
+    }
+  }
+
+  async function deleteJob(job: JobListItem) {
+    const confirmed = window.confirm("Delete this job? This cannot be undone.")
+    if (!confirmed) return
+
+    setDeletingJobId(job.id)
+    setError(null)
+    try {
+      const res = await fetch(`/v1/jobs/${job.id}`, { method: "DELETE" })
+      const data = (await res.json().catch(() => null)) as { success?: boolean; error?: string } | null
+      if (!res.ok || !data?.success) {
+        setError(data?.error || "Unable to delete job")
+        return
+      }
+
+      if (selectedJobId === job.id) {
+        setDetailOpen(false)
+        setSelectedJobId(null)
+        setDetail(null)
+        setDetailError(null)
+      }
+
+      await refreshJobs({ reset: true })
+    } catch {
+      setError("Network error while deleting job")
+    } finally {
+      setDeletingJobId(null)
+    }
   }
 
   function resetCreateForm() {
@@ -1935,14 +2002,46 @@ function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        type="button"
-                        onClick={() => openJobDetail(job.id)}
-                      >
-                        Details
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              type="button"
+                              aria-label="Job actions"
+                              disabled={deletingJobId === job.id}
+                            >
+                              ⋯
+                            </Button>
+                          }
+                        />
+                        <DropdownMenuContent align="end" className="min-w-44">
+                          <DropdownMenuGroup>
+                            <DropdownMenuItem
+                              onClick={() => openJobDetail(job.id)}
+                            >
+                              Details
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={job.status !== "completed" || downloadingJobId === job.id}
+                              onClick={() => downloadJob(job)}
+                            >
+                              {downloadingJobId === job.id ? "Downloading…" : "Download"}
+                            </DropdownMenuItem>
+                          </DropdownMenuGroup>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuGroup>
+                            <DropdownMenuItem
+                              variant="destructive"
+                              disabled={deletingJobId === job.id}
+                              onClick={() => deleteJob(job)}
+                            >
+                              {deletingJobId === job.id ? "Deleting…" : "Delete"}
+                            </DropdownMenuItem>
+                          </DropdownMenuGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))
@@ -2012,6 +2111,21 @@ function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
                 <div className="space-y-1">
                   <div className="text-muted-foreground">URL</div>
                   <div className="break-all font-mono text-[11px]">{detail.url}</div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-muted-foreground">Formats</div>
+                  {detail.formats && detail.formats.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {detail.formats.map((format) => (
+                        <Badge key={format} variant="secondary">
+                          {format}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground">—</div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

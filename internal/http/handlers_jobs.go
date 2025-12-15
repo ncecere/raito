@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 
@@ -32,6 +33,7 @@ type JobDetailItem struct {
 	Type        string     `json:"type"`
 	Status      string     `json:"status"`
 	URL         string     `json:"url"`
+	Formats     []string   `json:"formats,omitempty"`
 	Sync        bool       `json:"sync"`
 	Priority    int32      `json:"priority"`
 	CreatedAt   time.Time  `json:"createdAt"`
@@ -296,12 +298,14 @@ func jobDetailHandler(c *fiber.Ctx) error {
 	}
 
 	expiresAt := computeJobExpiresAt(cfg, job.Type, job.CreatedAt)
+	formats := formatsFromJobInput(job.Type, job.Input)
 
 	detail := &JobDetailItem{
 		ID:          job.ID.String(),
 		Type:        job.Type,
 		Status:      job.Status,
 		URL:         job.Url,
+		Formats:     formats,
 		Sync:        job.Sync,
 		Priority:    job.Priority,
 		CreatedAt:   job.CreatedAt,
@@ -317,6 +321,53 @@ func jobDetailHandler(c *fiber.Ctx) error {
 		Success: true,
 		Job:     detail,
 	})
+}
+
+func formatsFromJobInput(jobType string, input []byte) []string {
+	switch jobType {
+	case "scrape":
+		var req ScrapeRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.Formats)
+		if len(formats) == 0 {
+			return []string{"markdown"}
+		}
+		return formats
+	case "crawl":
+		var req CrawlRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.Formats)
+		if len(formats) == 0 {
+			return []string{"markdown"}
+		}
+		return formats
+	case "batch_scrape", "batch":
+		var req BatchScrapeRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.Formats)
+		if len(formats) == 0 {
+			return []string{"markdown"}
+		}
+		return formats
+	case "extract":
+		var req ExtractRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		if req.ScrapeOptions == nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.ScrapeOptions.Formats)
+		return formats
+	default:
+		return nil
+	}
 }
 
 func computeJobExpiresAt(cfg *config.Config, jobType string, createdAt time.Time) *time.Time {

@@ -380,6 +380,19 @@ func (s *Store) DeleteExpiredJobsByType(ctx context.Context, jobType string, cut
 	return rows, nil
 }
 
+// DeleteJobByID deletes a job row by ID. Documents are removed via ON DELETE CASCADE.
+func (s *Store) DeleteJobByID(ctx context.Context, id uuid.UUID) (bool, error) {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM jobs WHERE id = $1`, id)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
 // GetAPIKeyByRawKey looks up an API key by its raw value.
 func (s *Store) GetAPIKeyByRawKey(ctx context.Context, rawKey string) (db.ApiKey, error) {
 	hash := hashAPIKey(rawKey)
