@@ -56,13 +56,14 @@ type Job struct {
 }
 
 type Tenant struct {
-	ID          uuid.UUID
-	Slug        string
-	Name        string
-	Type        string
-	OwnerUserID uuid.NullUUID
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                              uuid.UUID
+	Slug                            string
+	Name                            string
+	Type                            string
+	OwnerUserID                     uuid.NullUUID
+	CreatedAt                       time.Time
+	UpdatedAt                       time.Time
+	DefaultApiKeyRateLimitPerMinute sql.NullInt32
 }
 
 type TenantMember struct {
@@ -86,4 +87,6 @@ type User struct {
 	UpdatedAt       time.Time
 	DefaultTenantID uuid.NullUUID
 	ThemePreference string
+	IsDisabled      bool
+	DisabledAt      sql.NullTime
 }

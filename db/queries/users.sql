@@ -21,3 +21,33 @@ SET
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
+
+-- name: AdminCountUsers :one
+SELECT COUNT(*) FROM users
+WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%');
+
+-- name: AdminListUsers :many
+SELECT * FROM users
+WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: AdminUpdateUser :one
+UPDATE users
+SET
+    name = $2,
+    is_system_admin = $3,
+    is_disabled = $4,
+    disabled_at = $5,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
+-- name: AdminSetUserPassword :one
+UPDATE users
+SET
+    password_hash = $2,
+    password_version = $3,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;

@@ -7,14 +7,177 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
 )
 
+const adminCountTenants = `-- name: AdminCountTenants :one
+SELECT COUNT(*) FROM tenants
+WHERE ($1 = '' OR slug ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+  AND ($2 OR type <> 'personal')
+`
+
+type AdminCountTenantsParams struct {
+	Column1 interface{}
+	Column2 interface{}
+}
+
+func (q *Queries) AdminCountTenants(ctx context.Context, arg AdminCountTenantsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, adminCountTenants, arg.Column1, arg.Column2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const adminListTenantMembers = `-- name: AdminListTenantMembers :many
+SELECT
+    tenant_members.tenant_id,
+    tenant_members.user_id,
+    tenant_members.role,
+    tenant_members.created_at,
+    tenant_members.updated_at,
+    users.email,
+    users.name
+FROM tenant_members
+JOIN users ON users.id = tenant_members.user_id
+WHERE tenant_members.tenant_id = $1
+ORDER BY tenant_members.created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type AdminListTenantMembersParams struct {
+	TenantID uuid.UUID
+	Limit    int32
+	Offset   int32
+}
+
+type AdminListTenantMembersRow struct {
+	TenantID  uuid.UUID
+	UserID    uuid.UUID
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Email     string
+	Name      sql.NullString
+}
+
+func (q *Queries) AdminListTenantMembers(ctx context.Context, arg AdminListTenantMembersParams) ([]AdminListTenantMembersRow, error) {
+	rows, err := q.db.QueryContext(ctx, adminListTenantMembers, arg.TenantID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListTenantMembersRow
+	for rows.Next() {
+		var i AdminListTenantMembersRow
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.UserID,
+			&i.Role,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Email,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminListTenants = `-- name: AdminListTenants :many
+SELECT id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute FROM tenants
+WHERE ($1 = '' OR slug ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+  AND ($2 OR type <> 'personal')
+ORDER BY created_at DESC
+LIMIT $3 OFFSET $4
+`
+
+type AdminListTenantsParams struct {
+	Column1 interface{}
+	Column2 interface{}
+	Limit   int32
+	Offset  int32
+}
+
+func (q *Queries) AdminListTenants(ctx context.Context, arg AdminListTenantsParams) ([]Tenant, error) {
+	rows, err := q.db.QueryContext(ctx, adminListTenants,
+		arg.Column1,
+		arg.Column2,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Tenant
+	for rows.Next() {
+		var i Tenant
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Type,
+			&i.OwnerUserID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DefaultApiKeyRateLimitPerMinute,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminSetTenantDefaultAPIKeyRateLimit = `-- name: AdminSetTenantDefaultAPIKeyRateLimit :one
+UPDATE tenants
+SET default_api_key_rate_limit_per_minute = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute
+`
+
+type AdminSetTenantDefaultAPIKeyRateLimitParams struct {
+	ID                              uuid.UUID
+	DefaultApiKeyRateLimitPerMinute sql.NullInt32
+}
+
+func (q *Queries) AdminSetTenantDefaultAPIKeyRateLimit(ctx context.Context, arg AdminSetTenantDefaultAPIKeyRateLimitParams) (Tenant, error) {
+	row := q.db.QueryRowContext(ctx, adminSetTenantDefaultAPIKeyRateLimit, arg.ID, arg.DefaultApiKeyRateLimitPerMinute)
+	var i Tenant
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Type,
+		&i.OwnerUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DefaultApiKeyRateLimitPerMinute,
+	)
+	return i, err
+}
+
 const createTenant = `-- name: CreateTenant :one
 INSERT INTO tenants (id, slug, name, type, owner_user_id)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, slug, name, type, owner_user_id, created_at, updated_at
+RETURNING id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute
 `
 
 type CreateTenantParams struct {
@@ -42,12 +205,13 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 		&i.OwnerUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultApiKeyRateLimitPerMinute,
 	)
 	return i, err
 }
 
 const getTenantByID = `-- name: GetTenantByID :one
-SELECT id, slug, name, type, owner_user_id, created_at, updated_at FROM tenants WHERE id = $1
+SELECT id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute FROM tenants WHERE id = $1
 `
 
 func (q *Queries) GetTenantByID(ctx context.Context, id uuid.UUID) (Tenant, error) {
@@ -61,12 +225,13 @@ func (q *Queries) GetTenantByID(ctx context.Context, id uuid.UUID) (Tenant, erro
 		&i.OwnerUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultApiKeyRateLimitPerMinute,
 	)
 	return i, err
 }
 
 const getTenantBySlug = `-- name: GetTenantBySlug :one
-SELECT id, slug, name, type, owner_user_id, created_at, updated_at FROM tenants WHERE slug = $1
+SELECT id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute FROM tenants WHERE slug = $1
 `
 
 func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (Tenant, error) {
@@ -80,12 +245,13 @@ func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (Tenant, err
 		&i.OwnerUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultApiKeyRateLimitPerMinute,
 	)
 	return i, err
 }
 
 const listPersonalTenantsForUser = `-- name: ListPersonalTenantsForUser :many
-SELECT id, slug, name, type, owner_user_id, created_at, updated_at FROM tenants
+SELECT id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute FROM tenants
 WHERE owner_user_id = $1 AND type = 'personal'
 ORDER BY created_at ASC
 `
@@ -107,6 +273,7 @@ func (q *Queries) ListPersonalTenantsForUser(ctx context.Context, ownerUserID uu
 			&i.OwnerUserID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DefaultApiKeyRateLimitPerMinute,
 		); err != nil {
 			return nil, err
 		}
@@ -122,7 +289,7 @@ func (q *Queries) ListPersonalTenantsForUser(ctx context.Context, ownerUserID uu
 }
 
 const listTenants = `-- name: ListTenants :many
-SELECT id, slug, name, type, owner_user_id, created_at, updated_at FROM tenants
+SELECT id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute FROM tenants
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -149,6 +316,7 @@ func (q *Queries) ListTenants(ctx context.Context, arg ListTenantsParams) ([]Ten
 			&i.OwnerUserID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DefaultApiKeyRateLimitPerMinute,
 		); err != nil {
 			return nil, err
 		}
@@ -164,7 +332,7 @@ func (q *Queries) ListTenants(ctx context.Context, arg ListTenantsParams) ([]Ten
 }
 
 const listTenantsForUser = `-- name: ListTenantsForUser :many
-SELECT tenants.id, tenants.slug, tenants.name, tenants.type, tenants.owner_user_id, tenants.created_at, tenants.updated_at FROM tenants
+SELECT tenants.id, tenants.slug, tenants.name, tenants.type, tenants.owner_user_id, tenants.created_at, tenants.updated_at, tenants.default_api_key_rate_limit_per_minute FROM tenants
 JOIN tenant_members ON tenant_members.tenant_id = tenants.id
 WHERE tenant_members.user_id = $1
 ORDER BY tenants.created_at DESC
@@ -187,6 +355,7 @@ func (q *Queries) ListTenantsForUser(ctx context.Context, userID uuid.UUID) ([]T
 			&i.OwnerUserID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DefaultApiKeyRateLimitPerMinute,
 		); err != nil {
 			return nil, err
 		}

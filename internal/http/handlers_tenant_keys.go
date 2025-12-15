@@ -41,6 +41,7 @@ type TenantCreateAPIKeyResponse struct {
 // System admins and tenant admins are allowed.
 func tenantCreateAPIKeyHandler(c *fiber.Ctx) error {
 	st := c.Locals("store").(*store.Store)
+	q := db.New(st.DB)
 
 	val := c.Locals("principal")
 	p, ok := val.(Principal)
@@ -86,7 +87,18 @@ func tenantCreateAPIKeyHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	raw, _, err := st.CreateRandomAPIKey(c.Context(), req.Label, false, req.RateLimitPerMinute, func() *string {
+	// If no rate limit is provided, fall back to the tenant's default (when set).
+	rateLimit := req.RateLimitPerMinute
+	if rateLimit == nil {
+		if tenant, err := q.GetTenantByID(c.Context(), tenantID); err == nil {
+			if tenant.DefaultApiKeyRateLimitPerMinute.Valid {
+				v := int(tenant.DefaultApiKeyRateLimitPerMinute.Int32)
+				rateLimit = &v
+			}
+		}
+	}
+
+	raw, _, err := st.CreateRandomAPIKey(c.Context(), req.Label, false, rateLimit, func() *string {
 		s := tenantID.String()
 		return &s
 	}())

@@ -67,6 +67,12 @@ func loginHandler(c *fiber.Ctx) error {
 				Code:    "INVALID_CREDENTIALS",
 				Error:   "invalid email or password",
 			})
+		case services.ErrUserDisabled:
+			return c.Status(fiber.StatusForbidden).JSON(LocalLoginResponse{
+				Success: false,
+				Code:    "USER_DISABLED",
+				Error:   "user account is disabled",
+			})
 		case services.ErrAuthProviderMismatch:
 			return c.Status(fiber.StatusBadRequest).JSON(LocalLoginResponse{
 				Success: false,
@@ -241,6 +247,12 @@ func oidcCallbackHandler(c *fiber.Ctx) error {
 				Success: false,
 				Code:    "OIDC_DISABLED",
 				Error:   "oidc auth is disabled in server configuration",
+			})
+		case services.ErrUserDisabled:
+			return c.Status(fiber.StatusForbidden).JSON(OIDCLoginResponse{
+				Success: false,
+				Code:    "USER_DISABLED",
+				Error:   "user account is disabled",
 			})
 		case services.ErrOIDCEmailMissing:
 			return c.Status(fiber.StatusBadRequest).JSON(OIDCLoginResponse{

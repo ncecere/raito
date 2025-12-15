@@ -7,6 +7,9 @@ import {
   TenantSwitcher,
   type TenantSwitcherTenant,
 } from "@/components/dashboard/tenant-switcher"
+import { AdminUsersPanel } from "@/components/dashboard/admin-users-panel"
+import { AdminTenantsPanel } from "@/components/dashboard/admin-tenants-panel"
+import { AdminAPIKeysPanel } from "@/components/dashboard/admin-api-keys-panel"
 import { ProfilePanel } from "@/components/dashboard/profile-panel"
 import { UsagePanel } from "@/components/dashboard/usage-panel"
 import { Button } from "@/components/ui/button"
@@ -80,10 +83,21 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Analytics01Icon, Key01Icon, Logout01Icon, ProfileIcon, Task01Icon, UserCircle02Icon } from "@hugeicons/core-free-icons"
+import { Analytics01Icon, Audit01Icon, Building03Icon, Key01Icon, Logout01Icon, ProfileIcon, Settings01Icon, Task01Icon, UserCircle02Icon, UserGroupIcon } from "@hugeicons/core-free-icons"
 
 
-export type DashboardSection = "apiKeys" | "jobs" | "usage" | "profile"
+export type DashboardSection =
+  | "apiKeys"
+  | "jobs"
+  | "usage"
+  | "profile"
+  | "adminUsers"
+  | "adminTenants"
+  | "adminApiKeys"
+  | "adminJobs"
+  | "adminUsage"
+  | "adminAudit"
+  | "adminSystem"
 
 export interface SessionInfo {
   user: {
@@ -138,6 +152,55 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
 
   const userDisplayName =
     session.user.isSystemAdmin ? "Admin" : session.user.name?.trim() || "Profile"
+
+  const sectionMeta: Record<DashboardSection, { title: string; description: string }> = {
+    apiKeys: {
+      title: "API keys",
+      description: "Manage API keys for programmatic access.",
+    },
+    jobs: {
+      title: "Jobs",
+      description: "Inspect recent scrape and crawl jobs.",
+    },
+    usage: {
+      title: "Usage",
+      description: "Understand activity and storage over time.",
+    },
+    profile: {
+      title: "Profile",
+      description: "Manage your account preferences.",
+    },
+    adminUsers: {
+      title: "Users",
+      description: "Manage users and permissions.",
+    },
+    adminTenants: {
+      title: "Tenants",
+      description: "Manage tenants and memberships.",
+    },
+    adminApiKeys: {
+      title: "API keys (admin)",
+      description: "Inspect and revoke API keys across tenants.",
+    },
+    adminJobs: {
+      title: "Jobs (admin)",
+      description: "Inspect jobs across tenants.",
+    },
+    adminUsage: {
+      title: "Usage (admin)",
+      description: "System-wide usage across tenants.",
+    },
+    adminAudit: {
+      title: "Audit log",
+      description: "Review security and administrative events.",
+    },
+    adminSystem: {
+      title: "System settings",
+      description: "Configure system-wide settings.",
+    },
+  }
+
+  const activeSection = sectionMeta[section]
 
   return (
     <SidebarProvider>
@@ -194,12 +257,71 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
                 <SidebarMenu>
                   <SidebarMenuItem>
                     <SidebarMenuButton
-                      isActive={false}
-                      onClick={() => {
-                        // Placeholder: future admin section.
-                      }}
+                      isActive={section === "adminUsers"}
+                      onClick={() => setSection("adminUsers")}
+                      tooltip="Users"
+                    >
+                      <HugeiconsIcon icon={UserGroupIcon} strokeWidth={2} />
+                      <span>Users</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={section === "adminTenants"}
+                      onClick={() => setSection("adminTenants")}
+                      tooltip="Tenants"
+                    >
+                      <HugeiconsIcon icon={Building03Icon} strokeWidth={2} />
+                      <span>Tenants</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={section === "adminApiKeys"}
+                      onClick={() => setSection("adminApiKeys")}
+                      tooltip="API keys (admin)"
+                    >
+                      <HugeiconsIcon icon={Key01Icon} strokeWidth={2} />
+                      <span>API keys</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={section === "adminJobs"}
+                      onClick={() => setSection("adminJobs")}
+                      tooltip="Jobs (admin)"
+                    >
+                      <HugeiconsIcon icon={Task01Icon} strokeWidth={2} />
+                      <span>Jobs</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={section === "adminUsage"}
+                      onClick={() => setSection("adminUsage")}
+                      tooltip="Usage (admin)"
+                    >
+                      <HugeiconsIcon icon={Analytics01Icon} strokeWidth={2} />
+                      <span>Usage</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={section === "adminAudit"}
+                      onClick={() => setSection("adminAudit")}
+                      tooltip="Audit log"
+                    >
+                      <HugeiconsIcon icon={Audit01Icon} strokeWidth={2} />
+                      <span>Audit log</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={section === "adminSystem"}
+                      onClick={() => setSection("adminSystem")}
                       tooltip="System settings"
                     >
+                      <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
                       <span>System settings</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -282,24 +404,8 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
               className="mr-2 data-[orientation=vertical]:h-4"
             />
             <div className="flex flex-col gap-1">
-              <h1 className="text-sm font-semibold">
-                {section === "apiKeys"
-                  ? "API keys"
-                  : section === "jobs"
-                    ? "Jobs"
-                    : section === "usage"
-                      ? "Usage"
-                      : "Profile"}
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                {section === "apiKeys"
-                  ? "Manage API keys for programmatic access."
-                  : section === "jobs"
-                    ? "Inspect recent scrape and crawl jobs."
-                    : section === "usage"
-                      ? "Understand activity and storage over time."
-                      : "Manage your account preferences."}
-              </p>
+              <h1 className="text-sm font-semibold">{activeSection.title}</h1>
+              <p className="text-xs text-muted-foreground">{activeSection.description}</p>
             </div>
           </div>
           <div className="px-4">
@@ -314,7 +420,7 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
             <JobsPanel activeTenantId={activeTenant?.id} sessionEmail={session.user.email} />
           ) : section === "usage" ? (
             <UsagePanel tenantId={activeTenant?.id} />
-          ) : (
+          ) : section === "profile" ? (
             <ProfilePanel
               userEmail={session.user.email}
               userName={session.user.name}
@@ -322,10 +428,30 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
               themePreference={session.user.themePreference}
               onUpdated={onTenantChanged}
             />
+          ) : section === "adminUsers" ? (
+            <AdminUsersPanel />
+          ) : section === "adminTenants" ? (
+            <AdminTenantsPanel />
+          ) : section === "adminApiKeys" ? (
+            <AdminAPIKeysPanel />
+          ) : (
+            <ComingSoonPanel title={activeSection.title} description={activeSection.description} />
           )}
         </div>
       </SidebarInset>
     </SidebarProvider>
+  )
+}
+
+function ComingSoonPanel({ title, description }: { title: string; description: string }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">{title}</CardTitle>
+        <CardDescription className="text-xs">{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground">Coming soon.</CardContent>
+    </Card>
   )
 }
 
@@ -1264,7 +1390,7 @@ function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
             }
           }}
         >
-          <SheetContent side="right" className="w-full sm:max-w-lg">
+          <SheetContent className="w-[min(100vw-2rem,48rem)]">
             <SheetHeader>
               <SheetTitle>Create job</SheetTitle>
               <SheetDescription>
@@ -2117,7 +2243,7 @@ function JobsPanel({ activeTenantId, sessionEmail }: JobsPanelProps) {
           }
         }}
       >
-        <SheetContent side="right" className="w-full sm:max-w-lg">
+        <SheetContent className="w-[min(100vw-2rem,48rem)]">
           <SheetHeader>
             <SheetTitle>Job details</SheetTitle>
             <SheetDescription>

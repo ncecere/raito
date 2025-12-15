@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -13,11 +14,14 @@ import (
 )
 
 type AdminTenantItem struct {
-	ID          string `json:"id"`
-	Slug        string `json:"slug"`
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	OwnerUserID string `json:"ownerUserId,omitempty"`
+	ID                              string    `json:"id"`
+	Slug                            string    `json:"slug"`
+	Name                            string    `json:"name"`
+	Type                            string    `json:"type"`
+	OwnerUserID                     string    `json:"ownerUserId,omitempty"`
+	CreatedAt                       time.Time `json:"createdAt"`
+	UpdatedAt                       time.Time `json:"updatedAt"`
+	DefaultAPIKeyRateLimitPerMinute *int      `json:"defaultApiKeyRateLimitPerMinute,omitempty"`
 }
 
 type AdminTenantResponse struct {
@@ -32,17 +36,22 @@ type AdminTenantsListResponse struct {
 	Code    string            `json:"code,omitempty"`
 	Error   string            `json:"error,omitempty"`
 	Tenants []AdminTenantItem `json:"tenants,omitempty"`
+	Total   int64             `json:"total,omitempty"`
 }
 
 type AdminCreateTenantRequest struct {
-	Slug string `json:"slug"`
-	Name string `json:"name"`
-	Type string `json:"type,omitempty"` // personal or org; default org
+	Slug                            string                     `json:"slug"`
+	Name                            string                     `json:"name"`
+	Type                            string                     `json:"type,omitempty"` // personal or org; default org
+	DefaultAPIKeyRateLimitPerMinute *int                       `json:"defaultApiKeyRateLimitPerMinute,omitempty"`
+	Members                         []AdminTenantMemberRequest `json:"members,omitempty"`
 }
 
 // adminCreateTenantHandler creates a new tenant (typically org) for system admins.
 func adminCreateTenantHandler(c *fiber.Ctx) error {
 	st := c.Locals("store").(*store.Store)
+	val := c.Locals("principal")
+	p, _ := val.(Principal)
 
 	var req AdminCreateTenantRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -100,14 +109,88 @@ func adminCreateTenantHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	// Persist tenant-scoped default rate limit (optional).
+	if req.DefaultAPIKeyRateLimitPerMinute != nil {
+		if *req.DefaultAPIKeyRateLimitPerMinute < 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(AdminTenantResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "defaultApiKeyRateLimitPerMinute must be >= 0",
+			})
+		}
+		tenant, err = q.AdminSetTenantDefaultAPIKeyRateLimit(c.Context(), db.AdminSetTenantDefaultAPIKeyRateLimitParams{
+			ID:                              tenant.ID,
+			DefaultApiKeyRateLimitPerMinute: sql.NullInt32{Int32: int32(*req.DefaultAPIKeyRateLimitPerMinute), Valid: true},
+		})
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(AdminTenantResponse{
+				Success: false,
+				Code:    "TENANT_UPDATE_FAILED",
+				Error:   err.Error(),
+			})
+		}
+	}
+
+	// Add requested members (and include the creator as tenant_admin by default).
+	members := make([]AdminTenantMemberRequest, 0, len(req.Members)+1)
+	if p.UserID != nil {
+		members = append(members, AdminTenantMemberRequest{UserID: p.UserID.String(), Role: "tenant_admin"})
+	}
+	members = append(members, req.Members...)
+
+	seen := map[string]struct{}{}
+	for _, m := range members {
+		uid, err := uuid.Parse(strings.TrimSpace(m.UserID))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(AdminTenantResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid member userId",
+			})
+		}
+		if _, ok := seen[uid.String()]; ok {
+			continue
+		}
+		seen[uid.String()] = struct{}{}
+
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if role == "" {
+			role = "tenant_member"
+		}
+		if role != "tenant_admin" && role != "tenant_member" {
+			return c.Status(fiber.StatusBadRequest).JSON(AdminTenantResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "member role must be 'tenant_admin' or 'tenant_member'",
+			})
+		}
+		if _, err := q.AddTenantMember(c.Context(), db.AddTenantMemberParams{
+			TenantID: tenant.ID,
+			UserID:   uid,
+			Role:     role,
+		}); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(AdminTenantResponse{
+				Success: false,
+				Code:    "TENANT_MEMBER_ADD_FAILED",
+				Error:   err.Error(),
+			})
+		}
+	}
+
 	out := AdminTenantItem{
-		ID:   tenant.ID.String(),
-		Slug: tenant.Slug,
-		Name: tenant.Name,
-		Type: tenant.Type,
+		ID:        tenant.ID.String(),
+		Slug:      tenant.Slug,
+		Name:      tenant.Name,
+		Type:      tenant.Type,
+		CreatedAt: tenant.CreatedAt,
+		UpdatedAt: tenant.UpdatedAt,
 	}
 	if tenant.OwnerUserID.Valid {
 		out.OwnerUserID = tenant.OwnerUserID.UUID.String()
+	}
+	if tenant.DefaultApiKeyRateLimitPerMinute.Valid {
+		v := int(tenant.DefaultApiKeyRateLimitPerMinute.Int32)
+		out.DefaultAPIKeyRateLimitPerMinute = &v
 	}
 
 	return c.Status(fiber.StatusOK).JSON(AdminTenantResponse{
@@ -120,6 +203,20 @@ func adminCreateTenantHandler(c *fiber.Ctx) error {
 func adminListTenantsHandler(c *fiber.Ctx) error {
 	st := c.Locals("store").(*store.Store)
 	q := db.New(st.DB)
+
+	query := strings.TrimSpace(c.Query("query"))
+	includePersonal := false
+	if raw := c.Query("includePersonal"); raw != "" {
+		val, err := strconv.ParseBool(raw)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(AdminTenantsListResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid includePersonal value; expected true or false",
+			})
+		}
+		includePersonal = val
+	}
 
 	limit := 50
 	if v := c.Query("limit"); v != "" {
@@ -150,9 +247,23 @@ func adminListTenantsHandler(c *fiber.Ctx) error {
 		offset = n
 	}
 
-	rows, err := q.ListTenants(c.Context(), db.ListTenantsParams{
-		Limit:  int32(limit),
-		Offset: int32(offset),
+	total, err := q.AdminCountTenants(c.Context(), db.AdminCountTenantsParams{
+		Column1: query,
+		Column2: includePersonal,
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(AdminTenantsListResponse{
+			Success: false,
+			Code:    "TENANT_LIST_FAILED",
+			Error:   err.Error(),
+		})
+	}
+
+	rows, err := q.AdminListTenants(c.Context(), db.AdminListTenantsParams{
+		Column1: query,
+		Column2: includePersonal,
+		Limit:   int32(limit),
+		Offset:  int32(offset),
 	})
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(AdminTenantsListResponse{
@@ -165,13 +276,19 @@ func adminListTenantsHandler(c *fiber.Ctx) error {
 	items := make([]AdminTenantItem, 0, len(rows))
 	for _, t := range rows {
 		item := AdminTenantItem{
-			ID:   t.ID.String(),
-			Slug: t.Slug,
-			Name: t.Name,
-			Type: t.Type,
+			ID:        t.ID.String(),
+			Slug:      t.Slug,
+			Name:      t.Name,
+			Type:      t.Type,
+			CreatedAt: t.CreatedAt,
+			UpdatedAt: t.UpdatedAt,
 		}
 		if t.OwnerUserID.Valid {
 			item.OwnerUserID = t.OwnerUserID.UUID.String()
+		}
+		if t.DefaultApiKeyRateLimitPerMinute.Valid {
+			v := int(t.DefaultApiKeyRateLimitPerMinute.Int32)
+			item.DefaultAPIKeyRateLimitPerMinute = &v
 		}
 		items = append(items, item)
 	}
@@ -179,6 +296,7 @@ func adminListTenantsHandler(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(AdminTenantsListResponse{
 		Success: true,
 		Tenants: items,
+		Total:   total,
 	})
 }
 
@@ -214,13 +332,19 @@ func adminGetTenantHandler(c *fiber.Ctx) error {
 	}
 
 	item := AdminTenantItem{
-		ID:   tenant.ID.String(),
-		Slug: tenant.Slug,
-		Name: tenant.Name,
-		Type: tenant.Type,
+		ID:        tenant.ID.String(),
+		Slug:      tenant.Slug,
+		Name:      tenant.Name,
+		Type:      tenant.Type,
+		CreatedAt: tenant.CreatedAt,
+		UpdatedAt: tenant.UpdatedAt,
 	}
 	if tenant.OwnerUserID.Valid {
 		item.OwnerUserID = tenant.OwnerUserID.UUID.String()
+	}
+	if tenant.DefaultApiKeyRateLimitPerMinute.Valid {
+		v := int(tenant.DefaultApiKeyRateLimitPerMinute.Int32)
+		item.DefaultAPIKeyRateLimitPerMinute = &v
 	}
 
 	return c.Status(fiber.StatusOK).JSON(AdminTenantResponse{
@@ -275,11 +399,11 @@ func adminUpdateTenantHandler(c *fiber.Ctx) error {
 	}
 
 	setClause := strings.Join(updates, ", ")
-	query := "UPDATE tenants SET " + setClause + ", updated_at = NOW() WHERE id = $1 RETURNING id, slug, name, type, owner_user_id"
+	query := "UPDATE tenants SET " + setClause + ", updated_at = NOW() WHERE id = $1 RETURNING id, slug, name, type, owner_user_id, created_at, updated_at, default_api_key_rate_limit_per_minute"
 
 	row := st.DB.QueryRowContext(c.Context(), query, args...)
 	var t db.Tenant
-	if err := row.Scan(&t.ID, &t.Slug, &t.Name, &t.Type, &t.OwnerUserID); err != nil {
+	if err := row.Scan(&t.ID, &t.Slug, &t.Name, &t.Type, &t.OwnerUserID, &t.CreatedAt, &t.UpdatedAt, &t.DefaultApiKeyRateLimitPerMinute); err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(AdminTenantResponse{
 				Success: false,
@@ -295,13 +419,19 @@ func adminUpdateTenantHandler(c *fiber.Ctx) error {
 	}
 
 	item := AdminTenantItem{
-		ID:   t.ID.String(),
-		Slug: t.Slug,
-		Name: t.Name,
-		Type: t.Type,
+		ID:        t.ID.String(),
+		Slug:      t.Slug,
+		Name:      t.Name,
+		Type:      t.Type,
+		CreatedAt: t.CreatedAt,
+		UpdatedAt: t.UpdatedAt,
 	}
 	if t.OwnerUserID.Valid {
 		item.OwnerUserID = t.OwnerUserID.UUID.String()
+	}
+	if t.DefaultApiKeyRateLimitPerMinute.Valid {
+		v := int(t.DefaultApiKeyRateLimitPerMinute.Int32)
+		item.DefaultAPIKeyRateLimitPerMinute = &v
 	}
 
 	return c.Status(fiber.StatusOK).JSON(AdminTenantResponse{
@@ -314,6 +444,103 @@ func adminUpdateTenantHandler(c *fiber.Ctx) error {
 type AdminTenantMemberRequest struct {
 	UserID string `json:"userId"`
 	Role   string `json:"role"`
+}
+
+type AdminTenantMemberItem struct {
+	UserID    string    `json:"userId"`
+	Email     string    `json:"email"`
+	Name      *string   `json:"name,omitempty"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type AdminTenantMembersResponse struct {
+	Success bool                    `json:"success"`
+	Members []AdminTenantMemberItem `json:"members"`
+	Total   int64                   `json:"total"`
+}
+
+func adminListTenantMembersHandler(c *fiber.Ctx) error {
+	st := c.Locals("store").(*store.Store)
+	q := db.New(st.DB)
+
+	rawID := c.Params("id")
+	tenantID, err := uuid.Parse(rawID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "invalid tenant id",
+		})
+	}
+
+	limit := 50
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid limit value",
+			})
+		}
+		if n > 500 {
+			n = 500
+		}
+		limit = n
+	}
+
+	offset := 0
+	if v := c.Query("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Success: false,
+				Code:    "BAD_REQUEST",
+				Error:   "invalid offset value",
+			})
+		}
+		offset = n
+	}
+
+	rows, err := q.AdminListTenantMembers(c.Context(), db.AdminListTenantMembersParams{
+		TenantID: tenantID,
+		Limit:    int32(limit),
+		Offset:   int32(offset),
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+			Success: false,
+			Code:    "TENANT_MEMBER_LIST_FAILED",
+			Error:   err.Error(),
+		})
+	}
+
+	items := make([]AdminTenantMemberItem, 0, len(rows))
+	for _, r := range rows {
+		var name *string
+		if r.Name.Valid {
+			n := r.Name.String
+			name = &n
+		}
+		items = append(items, AdminTenantMemberItem{
+			UserID:    r.UserID.String(),
+			Email:     r.Email,
+			Name:      name,
+			Role:      r.Role,
+			CreatedAt: r.CreatedAt,
+			UpdatedAt: r.UpdatedAt,
+		})
+	}
+
+	// Total is derived from the current list length; pagination can be extended later.
+	total := int64(len(items))
+	return c.Status(fiber.StatusOK).JSON(AdminTenantMembersResponse{
+		Success: true,
+		Members: items,
+		Total:   total,
+	})
 }
 
 // adminAddTenantMemberHandler adds or updates a member for a tenant.

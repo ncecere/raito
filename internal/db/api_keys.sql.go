@@ -9,9 +9,153 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const adminCountAPIKeys = `-- name: AdminCountAPIKeys :one
+SELECT COUNT(*)
+FROM api_keys k
+LEFT JOIN tenants t ON t.id::text = k.tenant_id
+LEFT JOIN users u ON u.id = k.user_id
+WHERE
+  ($1 = '' OR
+    k.label ILIKE '%' || $1 || '%' OR
+    COALESCE(t.name, '') ILIKE '%' || $1 || '%' OR
+    COALESCE(t.slug, '') ILIKE '%' || $1 || '%' OR
+    COALESCE(u.email, '') ILIKE '%' || $1 || '%' OR
+    COALESCE(u.name, '') ILIKE '%' || $1 || '%'
+  )
+  AND ($2::boolean OR k.revoked_at IS NULL)
+`
+
+type AdminCountAPIKeysParams struct {
+	Column1 interface{}
+	Column2 bool
+}
+
+func (q *Queries) AdminCountAPIKeys(ctx context.Context, arg AdminCountAPIKeysParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, adminCountAPIKeys, arg.Column1, arg.Column2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const adminListAPIKeys = `-- name: AdminListAPIKeys :many
+SELECT
+  k.id,
+  k.label,
+  k.is_admin,
+  k.rate_limit_per_minute,
+  k.tenant_id,
+  k.user_id,
+  k.created_at,
+  k.revoked_at,
+  t.name AS tenant_name,
+  t.slug AS tenant_slug,
+  t.type AS tenant_type,
+  u.email AS user_email,
+  u.name AS user_name
+FROM api_keys k
+LEFT JOIN tenants t ON t.id::text = k.tenant_id
+LEFT JOIN users u ON u.id = k.user_id
+WHERE
+  ($1 = '' OR
+    k.label ILIKE '%' || $1 || '%' OR
+    COALESCE(t.name, '') ILIKE '%' || $1 || '%' OR
+    COALESCE(t.slug, '') ILIKE '%' || $1 || '%' OR
+    COALESCE(u.email, '') ILIKE '%' || $1 || '%' OR
+    COALESCE(u.name, '') ILIKE '%' || $1 || '%'
+  )
+  AND ($2::boolean OR k.revoked_at IS NULL)
+ORDER BY k.created_at DESC
+LIMIT $3 OFFSET $4
+`
+
+type AdminListAPIKeysParams struct {
+	Column1 interface{}
+	Column2 bool
+	Limit   int32
+	Offset  int32
+}
+
+type AdminListAPIKeysRow struct {
+	ID                 uuid.UUID
+	Label              string
+	IsAdmin            bool
+	RateLimitPerMinute sql.NullInt32
+	TenantID           sql.NullString
+	UserID             uuid.NullUUID
+	CreatedAt          time.Time
+	RevokedAt          sql.NullTime
+	TenantName         sql.NullString
+	TenantSlug         sql.NullString
+	TenantType         sql.NullString
+	UserEmail          sql.NullString
+	UserName           sql.NullString
+}
+
+func (q *Queries) AdminListAPIKeys(ctx context.Context, arg AdminListAPIKeysParams) ([]AdminListAPIKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, adminListAPIKeys,
+		arg.Column1,
+		arg.Column2,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListAPIKeysRow
+	for rows.Next() {
+		var i AdminListAPIKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Label,
+			&i.IsAdmin,
+			&i.RateLimitPerMinute,
+			&i.TenantID,
+			&i.UserID,
+			&i.CreatedAt,
+			&i.RevokedAt,
+			&i.TenantName,
+			&i.TenantSlug,
+			&i.TenantType,
+			&i.UserEmail,
+			&i.UserName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminRevokeAPIKey = `-- name: AdminRevokeAPIKey :one
+UPDATE api_keys
+SET revoked_at = NOW()
+WHERE id = $1 AND revoked_at IS NULL
+RETURNING id, revoked_at
+`
+
+type AdminRevokeAPIKeyRow struct {
+	ID        uuid.UUID
+	RevokedAt sql.NullTime
+}
+
+func (q *Queries) AdminRevokeAPIKey(ctx context.Context, id uuid.UUID) (AdminRevokeAPIKeyRow, error) {
+	row := q.db.QueryRowContext(ctx, adminRevokeAPIKey, id)
+	var i AdminRevokeAPIKeyRow
+	err := row.Scan(&i.ID, &i.RevokedAt)
+	return i, err
+}
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
 SELECT id, key_hash, label, is_admin, rate_limit_per_minute, tenant_id, created_at, revoked_at, user_id FROM api_keys
