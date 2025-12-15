@@ -157,7 +157,7 @@ Session handling:
 
 - Issues a session cookie for the user (see Section 4).
 
-Response:
+For browser-based flows, the callback redirects back to `/` (the dashboard). For non-browser clients, the handler returns JSON:
 
 ```json
 {
@@ -167,6 +167,10 @@ Response:
 ```
 
 `firstLogin` is `true` when the OIDC user and their personal tenant are created for the first time.
+
+### 3.3 UI provider discovery
+
+The dashboard login page calls `GET /auth/providers` to discover which auth providers are enabled (local and/or OIDC) so it can render the correct sign-in options without hardcoding configuration.
 
 ---
 

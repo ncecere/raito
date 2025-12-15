@@ -4,6 +4,12 @@ This document explains how to run the Raito API using Docker Compose and how con
 
 Raito exposes a HTTP API (by default on `:8080`) for scraping, crawling, search, and extraction. The recommended way to run it in production-like environments is via the `deploy/` setup in this repository.
 
+Raito also includes a Web UI (dashboard). When using the Docker image or a binary compiled with the `embedwebui` build tag, the UI is served from the same process at:
+
+- `http://localhost:8080/` – dashboard UI
+
+See `docs/web-ui.md` for details.
+
 ## Prerequisites
 
 - Docker and Docker Compose
@@ -48,7 +54,7 @@ This will start:
 
 Once the containers are healthy, the API will be reachable at:
 
-- `http://localhost:8080` – main API
+- `http://localhost:8080` – dashboard UI (and API base URL)
 - `http://localhost:8080/healthz` – health check
 - `http://localhost:8080/metrics` – Prometheus-style metrics
 

@@ -37,6 +37,9 @@ Start with:
   - Docker Compose stack (Postgres, Redis, SearxNG, API, workers).
   - Running via the published Docker image.
   - Running the Go binary locally while using the same Postgres/Redis stack.
+- `docs/web-ui.md` – the dashboard UI:
+  - Local dev workflow (`bun run dev`) with API proxying.
+  - Production embedded UI (Go `embedwebui` build tag and Docker builds).
 - `docs/config.md` – how to configure Raito:
   - `config.yaml` structure (`server`, `scraper`, `crawler`, `robots`, `rod`, `database`, `redis`, `auth`, `ratelimit`, `worker`, `search`, `retention`, `llm`).
   - Defaults and example production/local setups.

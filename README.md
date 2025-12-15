@@ -433,6 +433,27 @@ Raito uses `log/slog` for structured request logging. The logging middleware rec
 
 You can extend this by adding more context in handlers (via `c.Locals`) if needed.
 
+## Web UI (Dashboard)
+
+Raito includes a dashboard UI that can be served by the same `raito-api` process.
+
+- In Docker Compose (and in release binaries), the UI is embedded and served from:
+  - `http://localhost:8080/`
+
+### Developing the UI
+
+For fast iteration, run the Vite dev server:
+
+```bash
+cd raito/frontend
+bun install
+bun run dev
+```
+
+This serves the UI on `http://localhost:5173` and proxies `/auth`, `/v1`, and `/admin` to `http://localhost:8080`.
+
+For details on embedding/build tags and Docker builds, see `docs/web-ui.md`.
+
 ## Next steps
 
 For local development, the typical workflow is:
