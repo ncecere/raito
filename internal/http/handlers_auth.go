@@ -2,6 +2,7 @@ package http
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -304,8 +305,17 @@ func oidcCallbackHandler(c *fiber.Ctx) error {
 	}
 	_ = issueSessionCookie(c, cfg, res.User.ID, defaultTenantID, res.User.IsSystemAdmin)
 
-	return c.Status(fiber.StatusOK).JSON(OIDCLoginResponse{
-		Success:    true,
-		FirstLogin: res.FirstLogin,
-	})
+	// Browser-based OIDC flows should land back on the dashboard instead of
+	// stopping on a JSON response.
+	accept := strings.ToLower(c.Get("Accept"))
+	if strings.Contains(accept, "text/html") || strings.Contains(accept, "*/*") {
+		redirectTo := c.Query("redirect", "/")
+		// Only allow relative redirects to avoid open-redirect issues.
+		if !strings.HasPrefix(redirectTo, "/") || strings.HasPrefix(redirectTo, "//") {
+			redirectTo = "/"
+		}
+		return c.Redirect(redirectTo, fiber.StatusFound)
+	}
+
+	return c.Status(fiber.StatusOK).JSON(OIDCLoginResponse{Success: true, FirstLogin: res.FirstLogin})
 }

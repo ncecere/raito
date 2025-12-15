@@ -167,6 +167,10 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 	admin := app.Group("/admin", authMw, adminOnlyMiddleware)
 	registerAdminRoutes(admin)
 
+	// Serve the embedded frontend (if compiled with -tags embedwebui).
+	// This must be registered last so API routes take precedence.
+	registerWebUIRoutes(app)
+
 	return &Server{
 		app:    app,
 		config: cfg,

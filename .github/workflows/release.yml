@@ -27,13 +27,22 @@ jobs:
           # Adjust if you upgrade the Go version
           go-version: '1.24.x'
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build web UI (Vite)
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Build binary
         run: |
           mkdir -p dist
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -trimpath -ldflags="-s -w" \
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -tags embedwebui -trimpath -ldflags="-s -w" \
               -o dist/raito-api_${{ matrix.goos }}_${{ matrix.goarch }}${EXT} ./cmd/raito-api
 
       - name: Upload artifacts
