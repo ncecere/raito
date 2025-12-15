@@ -126,21 +126,6 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {oidcEnabled ? (
-                <Button
-                  type="button"
-                  className="w-full"
-                  disabled={submitting}
-                  onClick={() => {
-                    window.location.assign("/auth/oidc/login")
-                  }}
-                >
-                  Sign in with SSO
-                </Button>
-              ) : null}
-
-              {oidcEnabled && localEnabled ? <FieldSeparator>or</FieldSeparator> : null}
-
               {localEnabled ? (
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <FieldGroup>
@@ -168,7 +153,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
                       />
                     </Field>
                     <Field>
-                      <Button type="submit" disabled={submitting}>
+                      <Button type="submit" className="w-full" disabled={submitting}>
                         {submitting ? "Signing in..." : "Sign in"}
                       </Button>
                       <FieldDescription>
@@ -183,6 +168,23 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
               ) : (
                 <FieldDescription>No login methods are currently enabled.</FieldDescription>
               )}
+
+              {oidcEnabled && localEnabled ? (
+                <FieldSeparator className="mt-5 mb-4">or</FieldSeparator>
+              ) : null}
+
+              {oidcEnabled ? (
+                <Button
+                  type="button"
+                  className="w-full"
+                  disabled={submitting}
+                  onClick={() => {
+                    window.location.assign("/auth/oidc/login")
+                  }}
+                >
+                  Sign in with SSO
+                </Button>
+              ) : null}
             </div>
           </CardContent>
         </Card>
