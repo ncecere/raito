@@ -182,6 +182,10 @@ type Config struct {
 	Search    SearchConfig    `yaml:"search"`
 	Retention RetentionConfig `yaml:"retention"`
 	Bootstrap BootstrapConfig `yaml:"bootstrap"`
+
+	// Path is the source path this config was loaded from. It is not
+	// loaded from YAML.
+	Path string `yaml:"-"`
 }
 
 func Load(path string) *Config {
@@ -196,6 +200,7 @@ func Load(path string) *Config {
 		log.Fatalf("failed to decode config: %v", err)
 	}
 
+	cfg.Path = path
 	return &cfg
 }
 
