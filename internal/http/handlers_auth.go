@@ -94,10 +94,22 @@ func loginHandler(c *fiber.Ctx) error {
 	var defaultTenantID *uuid.UUID
 	{
 		q := db.New(st.DB)
-		personalTenants, err := q.ListPersonalTenantsForUser(c.Context(), uuid.NullUUID{UUID: res.User.ID, Valid: true})
-		if err == nil && len(personalTenants) > 0 {
-			id := personalTenants[0].ID
-			defaultTenantID = &id
+		if res.User.DefaultTenantID.Valid {
+			id := res.User.DefaultTenantID.UUID
+			// Ensure the user is a member of this tenant (defense-in-depth).
+			if _, err := q.GetTenantMember(c.Context(), db.GetTenantMemberParams{
+				TenantID: id,
+				UserID:   res.User.ID,
+			}); err == nil {
+				defaultTenantID = &id
+			}
+		}
+		if defaultTenantID == nil {
+			personalTenants, err := q.ListPersonalTenantsForUser(c.Context(), uuid.NullUUID{UUID: res.User.ID, Valid: true})
+			if err == nil && len(personalTenants) > 0 {
+				id := personalTenants[0].ID
+				defaultTenantID = &id
+			}
 		}
 	}
 	_ = issueSessionCookie(c, cfg, res.User.ID, defaultTenantID, res.User.IsSystemAdmin)
@@ -261,10 +273,21 @@ func oidcCallbackHandler(c *fiber.Ctx) error {
 	var defaultTenantID *uuid.UUID
 	{
 		q := db.New(st.DB)
-		personalTenants, err := q.ListPersonalTenantsForUser(c.Context(), uuid.NullUUID{UUID: res.User.ID, Valid: true})
-		if err == nil && len(personalTenants) > 0 {
-			id := personalTenants[0].ID
-			defaultTenantID = &id
+		if res.User.DefaultTenantID.Valid {
+			id := res.User.DefaultTenantID.UUID
+			if _, err := q.GetTenantMember(c.Context(), db.GetTenantMemberParams{
+				TenantID: id,
+				UserID:   res.User.ID,
+			}); err == nil {
+				defaultTenantID = &id
+			}
+		}
+		if defaultTenantID == nil {
+			personalTenants, err := q.ListPersonalTenantsForUser(c.Context(), uuid.NullUUID{UUID: res.User.ID, Valid: true})
+			if err == nil && len(personalTenants) > 0 {
+				id := personalTenants[0].ID
+				defaultTenantID = &id
+			}
 		}
 	}
 	_ = issueSessionCookie(c, cfg, res.User.ID, defaultTenantID, res.User.IsSystemAdmin)

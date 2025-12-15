@@ -84,4 +84,6 @@ type User struct {
 	PasswordVersion sql.NullInt32
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	DefaultTenantID uuid.NullUUID
+	ThemePreference string
 }

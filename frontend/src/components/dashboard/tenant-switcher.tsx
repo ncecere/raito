@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Building03Icon } from "@hugeicons/core-free-icons"
+import { Building03Icon, ProfileIcon } from "@hugeicons/core-free-icons"
 
 import {
   DropdownMenu,
@@ -36,7 +36,7 @@ interface TenantSwitcherProps {
 }
 
 export function TenantSwitcher({ activeTenantName, activeTenantType, onTenantSelected }: TenantSwitcherProps) {
-  const { isMobile } = useSidebar()
+  useSidebar()
   const [tenants, setTenants] = useState<TenantSwitcherTenant[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -102,6 +102,8 @@ export function TenantSwitcher({ activeTenantName, activeTenantType, onTenantSel
         ? "Organization"
         : activeTenantType || ""
 
+  const activeIcon = activeTenantType === "personal" ? ProfileIcon : Building03Icon
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -110,12 +112,13 @@ export function TenantSwitcher({ activeTenantName, activeTenantType, onTenantSel
             render={
               <SidebarMenuButton
                 size="lg"
-                className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground rounded-lg border border-sidebar-border bg-sidebar"
+                className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground rounded-lg border border-sidebar-border bg-sidebar group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0"
+                title={activeName || "Select tenant"}
               >
                 <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-9 items-center justify-center rounded-md">
-                  <HugeiconsIcon icon={Building03Icon} strokeWidth={2} />
+                  <HugeiconsIcon icon={activeIcon} strokeWidth={2} />
                 </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
+                <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                   <span className="truncate font-medium">
                     {activeName || "Select tenant"}
                   </span>
@@ -125,14 +128,14 @@ export function TenantSwitcher({ activeTenantName, activeTenantType, onTenantSel
                       : error || activeTypeLabel || `${nonPersonalCount} tenant(s)`}
                   </span>
                 </div>
-                <span className="text-muted-foreground ml-auto text-xs">⌄</span>
+                <span className="text-muted-foreground ml-auto text-xs group-data-[collapsible=icon]:hidden">⌄</span>
               </SidebarMenuButton>
             }
           />
           <DropdownMenuContent
             className="w-(--anchor-width) min-w-56 rounded-lg"
             align="start"
-            side={isMobile ? "bottom" : "right"}
+            side="bottom"
             sideOffset={4}
           >
             <DropdownMenuGroup>
@@ -148,6 +151,7 @@ export function TenantSwitcher({ activeTenantName, activeTenantType, onTenantSel
                     : tenant.type === "org"
                       ? "Organization"
                       : tenant.type
+                const icon = tenant.type === "personal" ? ProfileIcon : Building03Icon
 
                 return (
                   <DropdownMenuItem
@@ -178,7 +182,7 @@ export function TenantSwitcher({ activeTenantName, activeTenantType, onTenantSel
                   >
 
                     <div className="flex size-6 items-center justify-center rounded-md border">
-                      <HugeiconsIcon icon={Building03Icon} strokeWidth={2} />
+                      <HugeiconsIcon icon={icon} strokeWidth={2} />
                     </div>
                     <div className="flex flex-col">
                       <span className="text-xs font-medium">{displayName}</span>

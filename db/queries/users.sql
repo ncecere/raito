@@ -11,3 +11,13 @@ SELECT * FROM users WHERE email = $1;
 
 -- name: GetUserByProviderSubject :one
 SELECT * FROM users WHERE auth_provider = $1 AND auth_subject = $2;
+
+-- name: UpdateUserProfile :one
+UPDATE users
+SET
+    name = $2,
+    theme_preference = $3,
+    default_tenant_id = $4,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;

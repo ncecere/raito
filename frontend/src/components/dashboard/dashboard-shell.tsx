@@ -7,6 +7,8 @@ import {
   TenantSwitcher,
   type TenantSwitcherTenant,
 } from "@/components/dashboard/tenant-switcher"
+import { ProfilePanel } from "@/components/dashboard/profile-panel"
+import { UsagePanel } from "@/components/dashboard/usage-panel"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -78,16 +80,19 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Briefcase01Icon, Key01Icon, Logout01Icon, Task01Icon, UserCircle02Icon } from "@hugeicons/core-free-icons"
+import { Analytics01Icon, Key01Icon, Logout01Icon, ProfileIcon, Task01Icon, UserCircle02Icon } from "@hugeicons/core-free-icons"
 
 
-export type DashboardSection = "apiKeys" | "jobs"
+export type DashboardSection = "apiKeys" | "jobs" | "usage" | "profile"
 
 export interface SessionInfo {
   user: {
     id: string
     email: string
+    name?: string
     isSystemAdmin: boolean
+    defaultTenantId?: string
+    themePreference?: "light" | "dark" | "system"
   }
   personalTenant?: {
     id: string
@@ -131,6 +136,9 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
   const activeTenantDisplayName =
     activeTenant?.type === "personal" ? "Personal" : activeTenant?.name
 
+  const userDisplayName =
+    session.user.isSystemAdmin ? "Admin" : session.user.name?.trim() || "Profile"
+
   return (
     <SidebarProvider>
       <Sidebar collapsible="icon" variant="inset">
@@ -147,21 +155,33 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={section === "apiKeys"}
-                    onClick={() => setSection("apiKeys")}
-                  >
-                    <HugeiconsIcon icon={Key01Icon} strokeWidth={2} />
-                    <span>API keys</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={section === "apiKeys"}
+                  onClick={() => setSection("apiKeys")}
+                  tooltip="API keys"
+                >
+                  <HugeiconsIcon icon={Key01Icon} strokeWidth={2} />
+                  <span>API keys</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+                <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={section === "jobs"}
+                  onClick={() => setSection("jobs")}
+                  tooltip="Jobs"
+                >
+                  <HugeiconsIcon icon={Task01Icon} strokeWidth={2} />
+                  <span>Jobs</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    isActive={section === "jobs"}
-                    onClick={() => setSection("jobs")}
+                    isActive={section === "usage"}
+                    onClick={() => setSection("usage")}
+                    tooltip="Usage"
                   >
-                    <HugeiconsIcon icon={Task01Icon} strokeWidth={2} />
-                    <span>Jobs</span>
+                    <HugeiconsIcon icon={Analytics01Icon} strokeWidth={2} />
+                    <span>Usage</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>
@@ -178,6 +198,7 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
                       onClick={() => {
                         // Placeholder: future admin section.
                       }}
+                      tooltip="System settings"
                     >
                       <span>System settings</span>
                     </SidebarMenuButton>
@@ -195,20 +216,21 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
                   render={
                     <SidebarMenuButton
                       size="lg"
-                      className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground rounded-lg border border-sidebar-border bg-sidebar"
+                      className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground rounded-lg border border-sidebar-border bg-sidebar group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0"
+                      title={session.user.email}
                     >
                       <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-9 items-center justify-center rounded-md">
                         <HugeiconsIcon icon={UserCircle02Icon} strokeWidth={2} />
                       </div>
-                      <div className="grid flex-1 text-left text-sm leading-tight">
+                      <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                         <span className="truncate font-medium">
-                          {session.user.isSystemAdmin ? "Admin" : "Account"}
+                          {userDisplayName}
                         </span>
                         <span className="truncate text-xs text-muted-foreground">
                           {session.user.email}
                         </span>
                       </div>
-                      <span className="text-muted-foreground ml-auto text-xs">⌄</span>
+                      <span className="text-muted-foreground ml-auto text-xs group-data-[collapsible=icon]:hidden">⌄</span>
                     </SidebarMenuButton>
                   }
                 />
@@ -223,13 +245,12 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
                       {activeTenant ? `Workspace: ${activeTenantDisplayName}` : "Workspace"}
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem disabled className="gap-2 p-2">
-                      <HugeiconsIcon icon={Briefcase01Icon} strokeWidth={2} />
-                      Account (coming soon)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem disabled className="gap-2 p-2">
-                      <HugeiconsIcon icon={Task01Icon} strokeWidth={2} />
-                      Settings (coming soon)
+                    <DropdownMenuItem
+                      className="gap-2 p-2"
+                      onClick={() => setSection("profile")}
+                    >
+                      <HugeiconsIcon icon={ProfileIcon} strokeWidth={2} />
+                      Profile
                     </DropdownMenuItem>
                   </DropdownMenuGroup>
                   <DropdownMenuSeparator />
@@ -262,12 +283,22 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
             />
             <div className="flex flex-col gap-1">
               <h1 className="text-sm font-semibold">
-                {section === "apiKeys" ? "API keys" : "Jobs"}
+                {section === "apiKeys"
+                  ? "API keys"
+                  : section === "jobs"
+                    ? "Jobs"
+                    : section === "usage"
+                      ? "Usage"
+                      : "Profile"}
               </h1>
               <p className="text-xs text-muted-foreground">
                 {section === "apiKeys"
                   ? "Manage API keys for programmatic access."
-                  : "Inspect recent scrape and crawl jobs."}
+                  : section === "jobs"
+                    ? "Inspect recent scrape and crawl jobs."
+                    : section === "usage"
+                      ? "Understand activity and storage over time."
+                      : "Manage your account preferences."}
               </p>
             </div>
           </div>
@@ -279,8 +310,18 @@ export function DashboardShell({ session, onLogout, onTenantChanged }: Dashboard
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
           {section === "apiKeys" ? (
             <ApiKeysPanel tenantId={activeTenant?.id} isPersonal={activeTenant?.type === "personal"} />
-          ) : (
+          ) : section === "jobs" ? (
             <JobsPanel activeTenantId={activeTenant?.id} sessionEmail={session.user.email} />
+          ) : section === "usage" ? (
+            <UsagePanel tenantId={activeTenant?.id} />
+          ) : (
+            <ProfilePanel
+              userEmail={session.user.email}
+              userName={session.user.name}
+              defaultTenantId={session.user.defaultTenantId}
+              themePreference={session.user.themePreference}
+              onUpdated={onTenantChanged}
+            />
           )}
         </div>
       </SidebarInset>

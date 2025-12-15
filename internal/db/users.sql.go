@@ -15,7 +15,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at
+RETURNING id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at, default_tenant_id, theme_preference
 `
 
 type CreateUserParams struct {
@@ -52,12 +52,14 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PasswordVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultTenantID,
+		&i.ThemePreference,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at FROM users WHERE email = $1
+SELECT id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at, default_tenant_id, theme_preference FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -74,12 +76,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PasswordVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultTenantID,
+		&i.ThemePreference,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at, default_tenant_id, theme_preference FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -96,12 +100,14 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.PasswordVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultTenantID,
+		&i.ThemePreference,
 	)
 	return i, err
 }
 
 const getUserByProviderSubject = `-- name: GetUserByProviderSubject :one
-SELECT id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at FROM users WHERE auth_provider = $1 AND auth_subject = $2
+SELECT id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at, default_tenant_id, theme_preference FROM users WHERE auth_provider = $1 AND auth_subject = $2
 `
 
 type GetUserByProviderSubjectParams struct {
@@ -123,6 +129,51 @@ func (q *Queries) GetUserByProviderSubject(ctx context.Context, arg GetUserByPro
 		&i.PasswordVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultTenantID,
+		&i.ThemePreference,
+	)
+	return i, err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users
+SET
+    name = $2,
+    theme_preference = $3,
+    default_tenant_id = $4,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, email, name, auth_provider, auth_subject, is_system_admin, password_hash, password_version, created_at, updated_at, default_tenant_id, theme_preference
+`
+
+type UpdateUserProfileParams struct {
+	ID              uuid.UUID
+	Name            sql.NullString
+	ThemePreference string
+	DefaultTenantID uuid.NullUUID
+}
+
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, updateUserProfile,
+		arg.ID,
+		arg.Name,
+		arg.ThemePreference,
+		arg.DefaultTenantID,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.AuthProvider,
+		&i.AuthSubject,
+		&i.IsSystemAdmin,
+		&i.PasswordHash,
+		&i.PasswordVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DefaultTenantID,
+		&i.ThemePreference,
 	)
 	return i, err
 }

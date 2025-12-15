@@ -153,6 +153,7 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 
 	v1 := app.Group("/v1", authMw, rateMw)
 	v1.Get("/tenants", listTenantsHandler)
+	v1.Get("/tenants/:id/usage", tenantUsageHandler)
 	v1.Post("/tenants/:id/select", selectTenantHandler)
 	v1.Get("/jobs", jobsListHandler)
 	v1.Get("/jobs/:id", jobDetailHandler)
@@ -190,4 +191,5 @@ func registerV1Routes(group fiber.Router) {
 	group.Get("/batch/scrape/:id", batchScrapeStatusHandler)
 	group.Post("/search", searchHandler)
 	group.Get("/me", meHandler)
+	group.Patch("/me", updateMeHandler)
 }

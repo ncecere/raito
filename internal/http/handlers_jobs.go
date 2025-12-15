@@ -82,29 +82,16 @@ func jobsListHandler(c *fiber.Ctx) error {
 	jobType := c.Query("type")
 	status := c.Query("status")
 
-	var tenantID *uuid.UUID
-	if p.IsSystemAdmin {
-		if v := c.Query("tenantId"); v != "" {
-			id, err := uuid.Parse(v)
-			if err != nil {
-				return c.Status(fiber.StatusBadRequest).JSON(ListJobsResponse{
-					Success: false,
-					Code:    "BAD_REQUEST",
-					Error:   "invalid tenantId value",
-				})
-			}
-			tenantID = &id
-		}
-	} else {
-		if p.TenantID == nil {
-			return c.Status(fiber.StatusBadRequest).JSON(ListJobsResponse{
-				Success: false,
-				Code:    "BAD_REQUEST",
-				Error:   "tenant context is required to list jobs",
-			})
-		}
-		tenantID = p.TenantID
+	// /v1/jobs is always scoped to the active tenant (even for system admins).
+	// Cross-tenant inspection should use /admin endpoints.
+	if p.TenantID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ListJobsResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "tenant context is required to list jobs",
+		})
 	}
+	tenantID := p.TenantID
 
 	var syncFilter *bool
 	if syncStr := c.Query("sync"); syncStr != "" {
@@ -245,6 +232,16 @@ func jobDetailHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	// /v1/jobs/:id is always scoped to the active tenant (even for system admins).
+	// Cross-tenant inspection should use /admin endpoints.
+	if p.TenantID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(JobDetailResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "tenant context is required to view jobs",
+		})
+	}
+
 	rawID := c.Params("id")
 	jobID, err := uuid.Parse(rawID)
 	if err != nil {
@@ -264,15 +261,13 @@ func jobDetailHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Enforce tenant scoping for non-admin callers when the job has a tenant.
-	if !p.IsSystemAdmin && job.TenantID.Valid {
-		if p.TenantID == nil || job.TenantID.UUID != *p.TenantID {
-			return c.Status(fiber.StatusNotFound).JSON(JobDetailResponse{
-				Success: false,
-				Code:    "NOT_FOUND",
-				Error:   "job not found",
-			})
-		}
+	// Enforce active-tenant scoping for all callers.
+	if !job.TenantID.Valid || job.TenantID.UUID != *p.TenantID {
+		return c.Status(fiber.StatusNotFound).JSON(JobDetailResponse{
+			Success: false,
+			Code:    "NOT_FOUND",
+			Error:   "job not found",
+		})
 	}
 
 	var completedAt *time.Time

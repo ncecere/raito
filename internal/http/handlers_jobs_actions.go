@@ -39,6 +39,16 @@ func jobDeleteHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	// /v1/jobs/:id is always scoped to the active tenant (even for system admins).
+	// Cross-tenant deletion should use /admin endpoints.
+	if p.TenantID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(JobDeleteResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "tenant context is required to delete jobs",
+		})
+	}
+
 	rawID := c.Params("id")
 	jobID, err := uuid.Parse(rawID)
 	if err != nil {
@@ -58,15 +68,13 @@ func jobDeleteHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Enforce tenant scoping for non-admin callers when the job has a tenant.
-	if !p.IsSystemAdmin && job.TenantID.Valid {
-		if p.TenantID == nil || job.TenantID.UUID != *p.TenantID {
-			return c.Status(fiber.StatusNotFound).JSON(JobDeleteResponse{
-				Success: false,
-				Code:    "NOT_FOUND",
-				Error:   "job not found",
-			})
-		}
+	// Enforce active-tenant scoping for all callers.
+	if !job.TenantID.Valid || job.TenantID.UUID != *p.TenantID {
+		return c.Status(fiber.StatusNotFound).JSON(JobDeleteResponse{
+			Success: false,
+			Code:    "NOT_FOUND",
+			Error:   "job not found",
+		})
 	}
 
 	deleted, err := st.DeleteJobByID(c.Context(), jobID)
@@ -101,6 +109,16 @@ func jobDownloadHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	// /v1/jobs/:id/download is always scoped to the active tenant (even for system admins).
+	// Cross-tenant downloads should use /admin endpoints.
+	if p.TenantID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "tenant context is required to download jobs",
+		})
+	}
+
 	rawID := c.Params("id")
 	jobID, err := uuid.Parse(rawID)
 	if err != nil {
@@ -127,15 +145,13 @@ func jobDownloadHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Enforce tenant scoping for non-admin callers when the job has a tenant.
-	if !p.IsSystemAdmin && job.TenantID.Valid {
-		if p.TenantID == nil || job.TenantID.UUID != *p.TenantID {
-			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
-				Success: false,
-				Code:    "NOT_FOUND",
-				Error:   "job not found",
-			})
-		}
+	// Enforce active-tenant scoping for all callers.
+	if !job.TenantID.Valid || job.TenantID.UUID != *p.TenantID {
+		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+			Success: false,
+			Code:    "NOT_FOUND",
+			Error:   "job not found",
+		})
 	}
 
 	if job.Status != "completed" {
