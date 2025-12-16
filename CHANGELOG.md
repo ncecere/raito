@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.1 – 2025-12-16
+
+### Fixed
+
+- Docker fresh-start reliability:
+  - Avoided goose migration races by running migrations/bootstrap only in the API role (workers no longer migrate).
+  - Added DB readiness retry before migrations to handle Postgres initdb startup windows.
+  - Fixed `0009_add_user_profile.sql` goose parsing by wrapping `DO $$ ... $$;` in `StatementBegin/StatementEnd`.
+  - Docker compose API healthcheck now uses `curl` (and runtime image includes it).
+  - Docker compose now passes args to the image entrypoint correctly.
+
 ## v0.4.0 – 2025-12-15
 
 ### Added
