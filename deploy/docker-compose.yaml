@@ -72,7 +72,7 @@ services:
       - ./config:/app/config:ro
     # Note: for this all-in-docker setup, your database.dsn in config.yaml should
     # point to host "postgres" (e.g. postgres://raito:raito@postgres:5432/raito?sslmode=disable).
-    command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "api"]
+    command: ["-config", "/app/config/config.yaml", "-role", "api"]
     ports:
       - "8090:8080"
 
@@ -85,7 +85,7 @@ services:
         condition: service_healthy
     volumes:
       - ./config:/app/config:ro
-    command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "worker"]
+    command: ["-config", "/app/config/config.yaml", "-role", "worker"]
 
   worker2:
     image: raito-api:latest
@@ -96,7 +96,7 @@ services:
         condition: service_healthy
     volumes:
       - ./config:/app/config:ro
-    command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "worker"]
+    command: ["-config", "/app/config/config.yaml", "-role", "worker"]
 
 volumes:
   raito-postgres-data:
