@@ -22,6 +22,7 @@ import (
 var (
 	ErrInvalidCredentials   = errors.New("invalid email or password")
 	ErrAuthProviderMismatch = errors.New("user exists but is not configured for this auth method")
+	ErrUserDisabled         = errors.New("user account is disabled")
 	ErrOIDCDisabled         = errors.New("oidc auth is disabled")
 	ErrOIDCEmailNotAllowed  = errors.New("email domain is not allowed for oidc")
 	ErrOIDCEmailMissing     = errors.New("oidc token did not contain an email")
@@ -129,6 +130,9 @@ func (s *authService) LoginOIDC(ctx context.Context, code, state string) (*OIDCA
 			AuthSubject:  subject,
 		})
 		if err == nil {
+			if user.IsDisabled {
+				return nil, ErrUserDisabled
+			}
 			if err := s.ensurePersonalTenantForUser(ctx, q, user); err != nil {
 				return nil, err
 			}
@@ -142,6 +146,9 @@ func (s *authService) LoginOIDC(ctx context.Context, code, state string) (*OIDCA
 	// Next, see if a user already exists for this email.
 	existing, err := q.GetUserByEmail(ctx, email)
 	if err == nil {
+		if existing.IsDisabled {
+			return nil, ErrUserDisabled
+		}
 		// User exists but not wired for OIDC with this subject.
 		if existing.AuthProvider != "oidc" || !existing.AuthSubject.Valid || existing.AuthSubject.String != subject.String {
 			return nil, ErrAuthProviderMismatch
@@ -235,6 +242,10 @@ func (s *authService) LoginLocal(ctx context.Context, email, password string) (*
 		return nil, err
 	}
 
+	if user.IsDisabled {
+		return nil, ErrUserDisabled
+	}
+
 	if user.AuthProvider != "local" {
 		return nil, ErrAuthProviderMismatch
 	}
@@ -244,6 +255,10 @@ func (s *authService) LoginLocal(ctx context.Context, email, password string) (*
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash.String), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
+	}
+
+	if err := s.ensurePersonalTenantForUser(ctx, q, user); err != nil {
+		return nil, err
 	}
 
 	return &LocalAuthResult{User: user, FirstLogin: false}, nil

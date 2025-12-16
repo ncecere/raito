@@ -25,6 +25,20 @@ type ApiKey struct {
 	UserID             uuid.NullUUID
 }
 
+type AuditEvent struct {
+	ID            int64
+	CreatedAt     time.Time
+	Action        string
+	ActorUserID   uuid.NullUUID
+	ActorApiKeyID uuid.NullUUID
+	TenantID      uuid.NullUUID
+	ResourceType  sql.NullString
+	ResourceID    sql.NullString
+	Ip            sql.NullString
+	UserAgent     sql.NullString
+	Metadata      json.RawMessage
+}
+
 type Document struct {
 	ID         int64
 	JobID      uuid.UUID
@@ -52,16 +66,18 @@ type Job struct {
 	Sync        bool
 	Output      pqtype.NullRawMessage
 	TenantID    uuid.NullUUID
+	ApiKeyID    uuid.NullUUID
 }
 
 type Tenant struct {
-	ID          uuid.UUID
-	Slug        string
-	Name        string
-	Type        string
-	OwnerUserID uuid.NullUUID
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                              uuid.UUID
+	Slug                            string
+	Name                            string
+	Type                            string
+	OwnerUserID                     uuid.NullUUID
+	CreatedAt                       time.Time
+	UpdatedAt                       time.Time
+	DefaultApiKeyRateLimitPerMinute sql.NullInt32
 }
 
 type TenantMember struct {
@@ -83,4 +99,8 @@ type User struct {
 	PasswordVersion sql.NullInt32
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	DefaultTenantID uuid.NullUUID
+	ThemePreference string
+	IsDisabled      bool
+	DisabledAt      sql.NullTime
 }

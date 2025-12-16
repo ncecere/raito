@@ -61,11 +61,24 @@ type adminRetentionResponse struct {
 // registerAdminRoutes registers admin-only endpoints under /admin.
 func registerAdminRoutes(group fiber.Router) {
 	group.Post("/api-keys", adminCreateAPIKeyHandler)
+	group.Get("/api-keys", adminListAPIKeysHandler)
+	group.Delete("/api-keys/:id", adminRevokeAPIKeyHandler)
+	group.Get("/usage", adminUsageHandler)
+	group.Get("/audit", adminListAuditEventsHandler)
+	group.Get("/system-settings", adminGetSystemSettingsHandler)
+	group.Patch("/system-settings", adminUpdateSystemSettingsHandler)
+
+	group.Post("/users", adminCreateUserHandler)
+	group.Get("/users", adminListUsersHandler)
+	group.Get("/users/:id", adminGetUserHandler)
+	group.Patch("/users/:id", adminUpdateUserHandler)
+	group.Post("/users/:id/reset-password", adminResetUserPasswordHandler)
 
 	group.Post("/tenants", adminCreateTenantHandler)
 	group.Get("/tenants", adminListTenantsHandler)
 	group.Get("/tenants/:id", adminGetTenantHandler)
 	group.Patch("/tenants/:id", adminUpdateTenantHandler)
+	group.Get("/tenants/:id/members", adminListTenantMembersHandler)
 	group.Post("/tenants/:id/members", adminAddTenantMemberHandler)
 	group.Patch("/tenants/:id/members/:userID", adminUpdateTenantMemberHandler)
 	group.Delete("/tenants/:id/members/:userID", adminRemoveTenantMemberHandler)

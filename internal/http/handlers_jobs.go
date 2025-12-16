@@ -1,12 +1,15 @@
 package http
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"raito/internal/config"
+	"raito/internal/db"
 	"raito/internal/store"
 )
 
@@ -18,8 +21,11 @@ type JobItem struct {
 	Sync        bool       `json:"sync"`
 	Priority    int32      `json:"priority"`
 	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	APIKeyID    string     `json:"apiKeyId,omitempty"`
+	APIKeyLabel string     `json:"apiKeyLabel,omitempty"`
 }
 
 type JobDetailItem struct {
@@ -27,12 +33,16 @@ type JobDetailItem struct {
 	Type        string     `json:"type"`
 	Status      string     `json:"status"`
 	URL         string     `json:"url"`
+	Formats     []string   `json:"formats,omitempty"`
 	Sync        bool       `json:"sync"`
 	Priority    int32      `json:"priority"`
 	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 	Error       string     `json:"error,omitempty"`
+	APIKeyID    string     `json:"apiKeyId,omitempty"`
+	APIKeyLabel string     `json:"apiKeyLabel,omitempty"`
 }
 
 type ListJobsResponse struct {
@@ -53,6 +63,10 @@ type JobDetailResponse struct {
 // For non-admin users, results are scoped to the current tenant.
 // System admins may optionally filter by tenantId via query param.
 func jobsListHandler(c *fiber.Ctx) error {
+	var cfg *config.Config
+	if val := c.Locals("config"); val != nil {
+		cfg, _ = val.(*config.Config)
+	}
 	st := c.Locals("store").(*store.Store)
 
 	val := c.Locals("principal")
@@ -68,29 +82,16 @@ func jobsListHandler(c *fiber.Ctx) error {
 	jobType := c.Query("type")
 	status := c.Query("status")
 
-	var tenantID *uuid.UUID
-	if p.IsSystemAdmin {
-		if v := c.Query("tenantId"); v != "" {
-			id, err := uuid.Parse(v)
-			if err != nil {
-				return c.Status(fiber.StatusBadRequest).JSON(ListJobsResponse{
-					Success: false,
-					Code:    "BAD_REQUEST",
-					Error:   "invalid tenantId value",
-				})
-			}
-			tenantID = &id
-		}
-	} else {
-		if p.TenantID == nil {
-			return c.Status(fiber.StatusBadRequest).JSON(ListJobsResponse{
-				Success: false,
-				Code:    "BAD_REQUEST",
-				Error:   "tenant context is required to list jobs",
-			})
-		}
-		tenantID = p.TenantID
+	// /v1/jobs is always scoped to the active tenant (even for system admins).
+	// Cross-tenant inspection should use /admin endpoints.
+	if p.TenantID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ListJobsResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "tenant context is required to list jobs",
+		})
 	}
+	tenantID := p.TenantID
 
 	var syncFilter *bool
 	if syncStr := c.Query("sync"); syncStr != "" {
@@ -150,12 +151,45 @@ func jobsListHandler(c *fiber.Ctx) error {
 		})
 	}
 
+	apiKeyLabels := map[uuid.UUID]string{}
+	{
+		ids := make([]uuid.UUID, 0, len(jobs))
+		seen := make(map[uuid.UUID]struct{}, len(jobs))
+		for _, job := range jobs {
+			if job.ApiKeyID.Valid {
+				id := job.ApiKeyID.UUID
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) > 0 {
+			q := db.New(st.DB)
+			rows, err := q.GetAPIKeyLabelsByIDs(c.Context(), ids)
+			if err == nil {
+				for _, row := range rows {
+					apiKeyLabels[row.ID] = row.Label
+				}
+			}
+		}
+	}
+
 	items := make([]JobItem, 0, len(jobs))
 	for _, job := range jobs {
 		var completedAt *time.Time
 		if job.CompletedAt.Valid {
 			t := job.CompletedAt.Time
 			completedAt = &t
+		}
+		expiresAt := computeJobExpiresAt(cfg, job.Type, job.CreatedAt)
+
+		var apiKeyLabel string
+		var apiKeyID string
+		if job.ApiKeyID.Valid {
+			apiKeyID = job.ApiKeyID.UUID.String()
+			apiKeyLabel = apiKeyLabels[job.ApiKeyID.UUID]
 		}
 		items = append(items, JobItem{
 			ID:          job.ID.String(),
@@ -165,8 +199,11 @@ func jobsListHandler(c *fiber.Ctx) error {
 			Sync:        job.Sync,
 			Priority:    job.Priority,
 			CreatedAt:   job.CreatedAt,
+			ExpiresAt:   expiresAt,
 			UpdatedAt:   job.UpdatedAt,
 			CompletedAt: completedAt,
+			APIKeyID:    apiKeyID,
+			APIKeyLabel: apiKeyLabel,
 		})
 	}
 
@@ -179,6 +216,10 @@ func jobsListHandler(c *fiber.Ctx) error {
 // jobDetailHandler returns details for a single job visible to the current principal.
 // Non-admin users are limited to jobs in their current tenant. Admins can see all jobs.
 func jobDetailHandler(c *fiber.Ctx) error {
+	var cfg *config.Config
+	if val := c.Locals("config"); val != nil {
+		cfg, _ = val.(*config.Config)
+	}
 	st := c.Locals("store").(*store.Store)
 
 	val := c.Locals("principal")
@@ -188,6 +229,16 @@ func jobDetailHandler(c *fiber.Ctx) error {
 			Success: false,
 			Code:    "UNAUTHENTICATED",
 			Error:   "User context is not available for this request",
+		})
+	}
+
+	// /v1/jobs/:id is always scoped to the active tenant (even for system admins).
+	// Cross-tenant inspection should use /admin endpoints.
+	if p.TenantID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(JobDetailResponse{
+			Success: false,
+			Code:    "BAD_REQUEST",
+			Error:   "tenant context is required to view jobs",
 		})
 	}
 
@@ -210,15 +261,13 @@ func jobDetailHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Enforce tenant scoping for non-admin callers when the job has a tenant.
-	if !p.IsSystemAdmin && job.TenantID.Valid {
-		if p.TenantID == nil || job.TenantID.UUID != *p.TenantID {
-			return c.Status(fiber.StatusNotFound).JSON(JobDetailResponse{
-				Success: false,
-				Code:    "NOT_FOUND",
-				Error:   "job not found",
-			})
-		}
+	// Enforce active-tenant scoping for all callers.
+	if !job.TenantID.Valid || job.TenantID.UUID != *p.TenantID {
+		return c.Status(fiber.StatusNotFound).JSON(JobDetailResponse{
+			Success: false,
+			Code:    "NOT_FOUND",
+			Error:   "job not found",
+		})
 	}
 
 	var completedAt *time.Time
@@ -232,21 +281,120 @@ func jobDetailHandler(c *fiber.Ctx) error {
 		errMsg = job.Error.String
 	}
 
+	var apiKeyLabel string
+	var apiKeyID string
+	if job.ApiKeyID.Valid {
+		apiKeyID = job.ApiKeyID.UUID.String()
+		q := db.New(st.DB)
+		rows, err := q.GetAPIKeyLabelsByIDs(c.Context(), []uuid.UUID{job.ApiKeyID.UUID})
+		if err == nil && len(rows) > 0 {
+			apiKeyLabel = rows[0].Label
+		}
+	}
+
+	expiresAt := computeJobExpiresAt(cfg, job.Type, job.CreatedAt)
+	formats := formatsFromJobInput(job.Type, job.Input)
+
 	detail := &JobDetailItem{
 		ID:          job.ID.String(),
 		Type:        job.Type,
 		Status:      job.Status,
 		URL:         job.Url,
+		Formats:     formats,
 		Sync:        job.Sync,
 		Priority:    job.Priority,
 		CreatedAt:   job.CreatedAt,
+		ExpiresAt:   expiresAt,
 		UpdatedAt:   job.UpdatedAt,
 		CompletedAt: completedAt,
 		Error:       errMsg,
+		APIKeyID:    apiKeyID,
+		APIKeyLabel: apiKeyLabel,
 	}
 
 	return c.Status(fiber.StatusOK).JSON(JobDetailResponse{
 		Success: true,
 		Job:     detail,
 	})
+}
+
+func formatsFromJobInput(jobType string, input []byte) []string {
+	switch jobType {
+	case "scrape":
+		var req ScrapeRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.Formats)
+		if len(formats) == 0 {
+			return []string{"markdown"}
+		}
+		return formats
+	case "crawl":
+		var req CrawlRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.Formats)
+		if len(formats) == 0 {
+			return []string{"markdown"}
+		}
+		return formats
+	case "batch_scrape", "batch":
+		var req BatchScrapeRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.Formats)
+		if len(formats) == 0 {
+			return []string{"markdown"}
+		}
+		return formats
+	case "extract":
+		var req ExtractRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil
+		}
+		if req.ScrapeOptions == nil {
+			return nil
+		}
+		formats := scrapeFormatNames(req.ScrapeOptions.Formats)
+		return formats
+	default:
+		return nil
+	}
+}
+
+func computeJobExpiresAt(cfg *config.Config, jobType string, createdAt time.Time) *time.Time {
+	if cfg == nil {
+		return nil
+	}
+
+	ttl := cfg.Retention.Jobs
+	days := ttl.DefaultDays
+	switch jobType {
+	case "scrape":
+		if ttl.ScrapeDays > 0 {
+			days = ttl.ScrapeDays
+		}
+	case "map":
+		if ttl.MapDays > 0 {
+			days = ttl.MapDays
+		}
+	case "extract":
+		if ttl.ExtractDays > 0 {
+			days = ttl.ExtractDays
+		}
+	case "crawl":
+		if ttl.CrawlDays > 0 {
+			days = ttl.CrawlDays
+		}
+	}
+
+	if days <= 0 {
+		return nil
+	}
+
+	expiresAt := createdAt.AddDate(0, 0, days)
+	return &expiresAt
 }

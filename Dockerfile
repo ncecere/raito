@@ -1,5 +1,18 @@
 # syntax=docker/dockerfile:1
 
+# Build the frontend (Vite) so it can be embedded into the Go binary.
+FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS webui-builder
+
+WORKDIR /app/frontend
+
+# Cache frontend deps
+COPY frontend/package.json frontend/bun.lock ./
+RUN bun install --frozen-lockfile
+
+# Build frontend
+COPY frontend ./
+RUN bun run build
+
 # Build stage
 FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
@@ -18,13 +31,16 @@ RUN go mod download
 # Copy the rest of the source
 COPY . .
 
+# Copy the built frontend into place for go:embed patterns.
+COPY --from=webui-builder /app/frontend/dist ./frontend/dist
+
 # Build the API binary
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /raito-api ./cmd/raito-api
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags embedwebui -trimpath -ldflags="-s -w" -o /raito-api ./cmd/raito-api
 
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates chromium \
+RUN apk add --no-cache ca-certificates chromium curl \
     && adduser -D -g '' raito
 
 WORKDIR /app

@@ -51,7 +51,19 @@ func scrapeHandler(c *fiber.Ctx) error {
 	// workers perform the browser/LLM work.
 	if execVal := c.Locals("executor"); execVal != nil {
 		if exec, ok := execVal.(WorkExecutor); ok && exec != nil {
-			ctx, cancel := context.WithTimeout(c.Context(), time.Duration(timeoutMs)*time.Millisecond)
+			baseCtx := context.Background()
+			if val := c.Locals("principal"); val != nil {
+				if p, ok := val.(Principal); ok {
+					if p.TenantID != nil {
+						baseCtx = context.WithValue(baseCtx, "tenant_id", *p.TenantID)
+					}
+					if p.APIKeyID != nil {
+						baseCtx = context.WithValue(baseCtx, "api_key_id", *p.APIKeyID)
+					}
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(baseCtx, time.Duration(timeoutMs)*time.Millisecond)
 			defer cancel()
 
 			res, err := exec.Scrape(ctx, &reqBody)

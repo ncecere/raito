@@ -153,9 +153,12 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 
 	v1 := app.Group("/v1", authMw, rateMw)
 	v1.Get("/tenants", listTenantsHandler)
+	v1.Get("/tenants/:id/usage", tenantUsageHandler)
 	v1.Post("/tenants/:id/select", selectTenantHandler)
 	v1.Get("/jobs", jobsListHandler)
 	v1.Get("/jobs/:id", jobDetailHandler)
+	v1.Delete("/jobs/:id", jobDeleteHandler)
+	v1.Get("/jobs/:id/download", jobDownloadHandler)
 	v1.Post("/tenants/:id/api-keys", tenantCreateAPIKeyHandler)
 	v1.Get("/tenants/:id/api-keys", tenantListAPIKeysHandler)
 	v1.Delete("/tenants/:id/api-keys/:keyID", tenantRevokeAPIKeyHandler)
@@ -163,6 +166,10 @@ func NewServer(cfg *config.Config, st *store.Store, logger *slog.Logger) *Server
 
 	admin := app.Group("/admin", authMw, adminOnlyMiddleware)
 	registerAdminRoutes(admin)
+
+	// Serve the embedded frontend (if compiled with -tags embedwebui).
+	// This must be registered last so API routes take precedence.
+	registerWebUIRoutes(app)
 
 	return &Server{
 		app:    app,
@@ -188,4 +195,5 @@ func registerV1Routes(group fiber.Router) {
 	group.Get("/batch/scrape/:id", batchScrapeStatusHandler)
 	group.Post("/search", searchHandler)
 	group.Get("/me", meHandler)
+	group.Patch("/me", updateMeHandler)
 }

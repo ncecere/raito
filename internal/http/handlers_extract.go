@@ -102,9 +102,15 @@ func extractHandler(c *fiber.Ctx) error {
 	svc := services.NewExtractService(st)
 
 	var tenantID *uuid.UUID
+	var apiKeyID *uuid.UUID
 	if val := c.Locals("principal"); val != nil {
-		if p, ok := val.(Principal); ok && p.TenantID != nil {
-			tenantID = p.TenantID
+		if p, ok := val.(Principal); ok {
+			if p.TenantID != nil {
+				tenantID = p.TenantID
+			}
+			if p.APIKeyID != nil {
+				apiKeyID = p.APIKeyID
+			}
 		}
 	}
 
@@ -113,6 +119,7 @@ func extractHandler(c *fiber.Ctx) error {
 		Body:       reqBody,
 		PrimaryURL: primaryURL,
 		TenantID:   tenantID,
+		APIKeyID:   apiKeyID,
 	}); err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(ExtractResponse{
 			Success: false,

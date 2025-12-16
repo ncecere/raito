@@ -23,6 +23,11 @@ func authMiddleware(cfg *config.Config, st *store.Store) fiber.Handler {
 			return c.Next()
 		}
 
+		var q *db.Queries
+		if st != nil && st.DB != nil {
+			q = db.New(st.DB)
+		}
+
 		// First, prefer API keys for automation.
 		rawAuth := c.Get("Authorization")
 		if rawAuth != "" && strings.HasPrefix(rawAuth, "Bearer ") {
@@ -53,6 +58,34 @@ func authMiddleware(cfg *config.Config, st *store.Store) fiber.Handler {
 
 			c.Locals("apiKey", apiKey)
 			p := principalFromAPIKey(apiKey)
+
+			// If the API key is associated with a user, make sure the user is not disabled.
+			if q != nil && p.UserID != nil {
+				user, err := q.GetUserByID(c.Context(), *p.UserID)
+				if err != nil {
+					if err == sql.ErrNoRows {
+						return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
+							Success: false,
+							Code:    "UNAUTHENTICATED",
+							Error:   "Invalid or revoked API key",
+						})
+					}
+					return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+						Success: false,
+						Code:    "INTERNAL_ERROR",
+						Error:   fmt.Sprintf("user lookup failed: %v", err),
+					})
+				}
+				if user.IsDisabled {
+					return c.Status(fiber.StatusForbidden).JSON(ErrorResponse{
+						Success: false,
+						Code:    "FORBIDDEN",
+						Error:   "User account is disabled",
+					})
+				}
+				p.IsSystemAdmin = user.IsSystemAdmin
+			}
+
 			c.Locals("principal", p)
 			return c.Next()
 		}
@@ -80,6 +113,26 @@ func authMiddleware(cfg *config.Config, st *store.Store) fiber.Handler {
 			}
 		}
 		p.IsSystemAdmin = claims.IsSystemAdmin
+
+		// Validate the user exists and is not disabled, and prefer DB for admin bit.
+		if q != nil && p.UserID != nil {
+			user, err := q.GetUserByID(c.Context(), *p.UserID)
+			if err != nil {
+				return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
+					Success: false,
+					Code:    "UNAUTHENTICATED",
+					Error:   "Missing or invalid authentication (API key or session)",
+				})
+			}
+			if user.IsDisabled {
+				return c.Status(fiber.StatusForbidden).JSON(ErrorResponse{
+					Success: false,
+					Code:    "FORBIDDEN",
+					Error:   "User account is disabled",
+				})
+			}
+			p.IsSystemAdmin = user.IsSystemAdmin
+		}
 
 		c.Locals("principal", p)
 		return c.Next()

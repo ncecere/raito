@@ -16,6 +16,7 @@ type BatchScrapeEnqueueRequest struct {
 	PrimaryURL string
 	Body       interface{}
 	TenantID   *uuid.UUID
+	APIKeyID   *uuid.UUID
 }
 
 // BatchScrapeService hides the details of inserting batch scrape jobs
@@ -36,6 +37,6 @@ func (s *batchScrapeService) Enqueue(ctx context.Context, req *BatchScrapeEnqueu
 	if req == nil {
 		return nil
 	}
-	_, err := s.st.CreateJob(ctx, req.ID, "batch_scrape", req.PrimaryURL, req.Body, false, 10, req.TenantID)
+	_, err := s.st.CreateJob(ctx, req.ID, "batch_scrape", req.PrimaryURL, req.Body, false, 10, req.TenantID, req.APIKeyID)
 	return err
 }

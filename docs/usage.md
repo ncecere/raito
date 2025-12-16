@@ -20,6 +20,12 @@ When `auth.enabled` is `true` (the default), all `/v1/*` and `/admin/*` endpoint
 
 For multi-tenancy and browser sessions (local/OIDC auth, tenants, and tenant-scoped API keys), see `docs/multi-tenancy.md`.
 
+If the server is running with the embedded Web UI enabled, you can also use the dashboard at:
+
+- `GET /` – dashboard UI (session-cookie auth)
+
+See `docs/web-ui.md` for the UI development/build workflow.
+
 Example (admin creates a user key):
 
 ```bash

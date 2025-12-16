@@ -210,11 +210,13 @@ func tenantUsageHandler(c *fiber.Ctx) error {
 
 	// Optional since/window filter for time-bounded stats.
 	var sinceParam any
-	sinceClause := ""
+	jobsSinceClause := ""
+	docsSinceClause := ""
 	if s := c.Query("since"); s != "" {
 		if t, err := time.Parse(time.RFC3339, s); err == nil {
 			sinceParam = t
-			sinceClause = " AND created_at >= $2"
+			jobsSinceClause = " AND created_at >= $2"
+			docsSinceClause = " AND j.created_at >= $2"
 		}
 	} else if w := c.Query("window"); w != "" {
 		now := time.Now().UTC()
@@ -227,13 +229,14 @@ func tenantUsageHandler(c *fiber.Ctx) error {
 			sinceParam = now.Add(-30 * 24 * time.Hour)
 		}
 		if sinceParam != nil {
-			sinceClause = " AND created_at >= $2"
+			jobsSinceClause = " AND created_at >= $2"
+			docsSinceClause = " AND j.created_at >= $2"
 		}
 	}
 
 	// Count jobs for this tenant.
 	var jobsCount int64
-	jobsQuery := "SELECT COUNT(*) FROM jobs WHERE tenant_id = $1" + sinceClause
+	jobsQuery := "SELECT COUNT(*) FROM jobs WHERE tenant_id = $1" + jobsSinceClause
 	if sinceParam != nil {
 		if err := st.DB.QueryRowContext(ctx, jobsQuery, tenantID, sinceParam).Scan(&jobsCount); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(TenantUsageResponse{
@@ -254,7 +257,7 @@ func tenantUsageHandler(c *fiber.Ctx) error {
 
 	// Jobs by type.
 	jobsByType := make(map[string]int64)
-	jobsByTypeQuery := "SELECT type, COUNT(*) FROM jobs WHERE tenant_id = $1" + sinceClause + " GROUP BY type"
+	jobsByTypeQuery := "SELECT type, COUNT(*) FROM jobs WHERE tenant_id = $1" + jobsSinceClause + " GROUP BY type"
 	var rows *sql.Rows
 	var err2 error
 	if sinceParam != nil {
@@ -276,7 +279,7 @@ func tenantUsageHandler(c *fiber.Ctx) error {
 
 	// Count documents for this tenant (via jobs).
 	var docsCount int64
-	docsQuery := "SELECT COUNT(*) FROM documents d JOIN jobs j ON d.job_id = j.id WHERE j.tenant_id = $1" + sinceClause
+	docsQuery := "SELECT COUNT(*) FROM documents d JOIN jobs j ON d.job_id = j.id WHERE j.tenant_id = $1" + docsSinceClause
 	if sinceParam != nil {
 		if err := st.DB.QueryRowContext(ctx, docsQuery, tenantID, sinceParam).Scan(&docsCount); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(TenantUsageResponse{
@@ -295,9 +298,53 @@ func tenantUsageHandler(c *fiber.Ctx) error {
 		}
 	}
 
+	// Count scrape/map jobs with persisted output as one document each.
+	var outputJobCount int64
+	outputJobQuery := "SELECT COUNT(*) FROM jobs WHERE tenant_id = $1 AND type IN ('scrape','map') AND output IS NOT NULL" + jobsSinceClause
+	if sinceParam != nil {
+		if err := st.DB.QueryRowContext(ctx, outputJobQuery, tenantID, sinceParam).Scan(&outputJobCount); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(TenantUsageResponse{
+				Success: false,
+				Code:    "USAGE_QUERY_FAILED",
+				Error:   err.Error(),
+			})
+		}
+	} else {
+		if err := st.DB.QueryRowContext(ctx, outputJobQuery, tenantID).Scan(&outputJobCount); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(TenantUsageResponse{
+				Success: false,
+				Code:    "USAGE_QUERY_FAILED",
+				Error:   err.Error(),
+			})
+		}
+	}
+
+	// Extract jobs store an object with `results: []` in jobs.output; count each element as a document.
+	var extractResultCount int64
+	extractCountQuery := "SELECT COALESCE(SUM(jsonb_array_length(output->'results')), 0) FROM jobs WHERE tenant_id = $1 AND type = 'extract' AND output IS NOT NULL" + jobsSinceClause
+	if sinceParam != nil {
+		if err := st.DB.QueryRowContext(ctx, extractCountQuery, tenantID, sinceParam).Scan(&extractResultCount); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(TenantUsageResponse{
+				Success: false,
+				Code:    "USAGE_QUERY_FAILED",
+				Error:   err.Error(),
+			})
+		}
+	} else {
+		if err := st.DB.QueryRowContext(ctx, extractCountQuery, tenantID).Scan(&extractResultCount); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(TenantUsageResponse{
+				Success: false,
+				Code:    "USAGE_QUERY_FAILED",
+				Error:   err.Error(),
+			})
+		}
+	}
+
+	docsCount = docsCount + outputJobCount + extractResultCount
+
 	// Documents by job type.
 	docsByType := make(map[string]int64)
-	docsByTypeQuery := "SELECT j.type, COUNT(*) FROM documents d JOIN jobs j ON d.job_id = j.id WHERE j.tenant_id = $1" + sinceClause + " GROUP BY j.type"
+	docsByTypeQuery := "SELECT j.type, COUNT(*) FROM documents d JOIN jobs j ON d.job_id = j.id WHERE j.tenant_id = $1" + docsSinceClause + " GROUP BY j.type"
 	if sinceParam != nil {
 		rows, err2 = st.DB.QueryContext(ctx, docsByTypeQuery, tenantID, sinceParam)
 	} else {
@@ -313,6 +360,34 @@ func tenantUsageHandler(c *fiber.Ctx) error {
 			}
 			docsByType[jobType] = cnt
 		}
+	}
+
+	if outputJobCount > 0 {
+		var scrapeCount int64
+		scrapeQuery := "SELECT COUNT(*) FROM jobs WHERE tenant_id = $1 AND type = 'scrape' AND output IS NOT NULL" + jobsSinceClause
+		if sinceParam != nil {
+			_ = st.DB.QueryRowContext(ctx, scrapeQuery, tenantID, sinceParam).Scan(&scrapeCount)
+		} else {
+			_ = st.DB.QueryRowContext(ctx, scrapeQuery, tenantID).Scan(&scrapeCount)
+		}
+		if scrapeCount > 0 {
+			docsByType["scrape"] = docsByType["scrape"] + scrapeCount
+		}
+
+		var mapCount int64
+		mapQuery := "SELECT COUNT(*) FROM jobs WHERE tenant_id = $1 AND type = 'map' AND output IS NOT NULL" + jobsSinceClause
+		if sinceParam != nil {
+			_ = st.DB.QueryRowContext(ctx, mapQuery, tenantID, sinceParam).Scan(&mapCount)
+		} else {
+			_ = st.DB.QueryRowContext(ctx, mapQuery, tenantID).Scan(&mapCount)
+		}
+		if mapCount > 0 {
+			docsByType["map"] = docsByType["map"] + mapCount
+		}
+	}
+
+	if extractResultCount > 0 {
+		docsByType["extract"] = docsByType["extract"] + extractResultCount
 	}
 
 	return c.Status(fiber.StatusOK).JSON(TenantUsageResponse{

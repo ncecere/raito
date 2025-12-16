@@ -16,6 +16,7 @@ type CrawlEnqueueRequest struct {
 	URL      string
 	Body     interface{}
 	TenantID *uuid.UUID
+	APIKeyID *uuid.UUID
 }
 
 // CrawlService encapsulates the persistence of crawl jobs so HTTP
@@ -36,6 +37,6 @@ func (s *crawlService) Enqueue(ctx context.Context, req *CrawlEnqueueRequest) er
 	if req == nil {
 		return nil
 	}
-	_, err := s.st.CreateCrawlJob(ctx, req.ID, req.URL, req.Body, req.TenantID)
+	_, err := s.st.CreateCrawlJob(ctx, req.ID, req.URL, req.Body, req.TenantID, req.APIKeyID)
 	return err
 }

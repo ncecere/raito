@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.0 – 2025-12-15
+
+### Added
+
+- Embedded web UI:
+  - Vite frontend build embedded into the `raito-api` binary (served by Fiber) via `go:embed`.
+  - Docker build now compiles the UI and embeds it into the image binary.
+- New shadcn-based dashboard UI:
+  - Sidebar + tenant switcher, theme toggle, and improved overall layout/styling.
+  - Login screen supporting local email/password and OIDC SSO (auto-detected from server config).
+  - Profile page (display name, theme preference, default workspace).
+- Jobs UI:
+  - Jobs list with filters, details, create-job flow (scrape/crawl/extract/map/batch scrape), and per-job actions (details, download, delete).
+  - Expires column and richer job metadata surfaced in the UI.
+- API keys UI:
+  - Tenant-scoped API key list/create/revoke flows (labelled keys and “copy once” behavior).
+- Usage UI:
+  - Tenant usage dashboard and admin usage dashboard with charts and time-window selection.
+  - Admin usage filtering by tenant or user.
+- Admin console UI:
+  - Admin pages for Users, Tenants, API keys, Jobs, Usage, Audit log, and System settings.
+- Admin system settings:
+  - Tabbed editor for server config (general/auth/search/llm), reading current values from the config file and writing updates back (with secret redaction + “set” controls).
+  - Added `/admin/system-settings` endpoints to read and update config.
+- Audit logging:
+  - `audit_events` table, sqlc queries, and `/admin/audit` endpoint.
+  - Best-effort audit recording for key admin actions.
+
+### Changed
+
+- Authentication:
+  - Added `/auth/providers` so the UI can show/hide login methods dynamically.
+  - OIDC callback now redirects back to the dashboard after successful login (instead of returning JSON).
+- Data model:
+  - Jobs can be associated with the API key that created them (`jobs.api_key_id`), enabling “API key used” display in the UI.
+  - Added user profile fields (theme preference, default tenant) and user disable support.
+  - Tenants can optionally define a default API key rate limit for keys created within that tenant.
+- Build/release:
+  - GitHub Actions release workflow now builds the frontend before producing release binaries and compiles with `-tags embedwebui`.
+  - Docker compose now reuses the same `raito-api` image for workers to avoid redundant builds.
+- Branding:
+  - Added light/dark logos for the frontend and updated the app title to `Raito`.
+
 ## v0.3.0 – 2025-12-14
 
 ### Added

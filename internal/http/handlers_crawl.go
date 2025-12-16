@@ -46,9 +46,15 @@ func crawlHandler(c *fiber.Ctx) error {
 	svc := services.NewCrawlService(st)
 
 	var tenantID *uuid.UUID
+	var apiKeyID *uuid.UUID
 	if val := c.Locals("principal"); val != nil {
-		if p, ok := val.(Principal); ok && p.TenantID != nil {
-			tenantID = p.TenantID
+		if p, ok := val.(Principal); ok {
+			if p.TenantID != nil {
+				tenantID = p.TenantID
+			}
+			if p.APIKeyID != nil {
+				apiKeyID = p.APIKeyID
+			}
 		}
 	}
 
@@ -57,6 +63,7 @@ func crawlHandler(c *fiber.Ctx) error {
 		URL:      reqBody.URL,
 		Body:     reqBody,
 		TenantID: tenantID,
+		APIKeyID: apiKeyID,
 	}); err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(CrawlResponse{
 			Success: false,

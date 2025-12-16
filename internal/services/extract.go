@@ -15,6 +15,7 @@ type ExtractRequest struct {
 	Body       any
 	PrimaryURL string
 	TenantID   *uuid.UUID
+	APIKeyID   *uuid.UUID
 }
 
 // ExtractService encapsulates the business logic for enqueuing
@@ -45,6 +46,6 @@ func (s *extractService) Enqueue(ctx context.Context, req *ExtractRequest) error
 		return errors.New("primary url is required")
 	}
 
-	_, err := s.st.CreateJob(ctx, req.ID, "extract", req.PrimaryURL, req.Body, false, 10, req.TenantID)
+	_, err := s.st.CreateJob(ctx, req.ID, "extract", req.PrimaryURL, req.Body, false, 10, req.TenantID, req.APIKeyID)
 	return err
 }
