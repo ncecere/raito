@@ -29,9 +29,15 @@ func main() {
 		log.Fatalf("invalid configuration: %v", err)
 	}
 
-	// Run migrations on a short-lived connection
-	if err := migrate.Run(cfg.Database.DSN); err != nil {
-		log.Fatalf("migrations failed: %v", err)
+	// Only API-capable roles run migrations/bootstraps. In Docker Compose we run
+	// migrations in the API container and keep workers migration-free to avoid
+	// concurrent migration races on a fresh database.
+	runMigrationsAndBootstrap := *role != "worker"
+	if runMigrationsAndBootstrap {
+		// Run migrations on a short-lived connection
+		if err := migrate.Run(cfg.Database.DSN); err != nil {
+			log.Fatalf("migrations failed: %v", err)
+		}
 	}
 
 	// Create a shared *sql.DB with pooling for the Store
@@ -47,7 +53,7 @@ func main() {
 	st := store.New(db)
 
 	// Ensure initial admin API key if configured
-	if cfg.Auth.Enabled && cfg.Auth.InitialAdminKey != "" {
+	if runMigrationsAndBootstrap && cfg.Auth.Enabled && cfg.Auth.InitialAdminKey != "" {
 		if _, err := st.EnsureAdminAPIKey(context.Background(), cfg.Auth.InitialAdminKey, "initial-admin"); err != nil {
 			log.Fatalf("ensure admin api key failed: %v", err)
 		}
@@ -55,8 +61,10 @@ func main() {
 
 	// Apply bootstrap configuration (users, tenants) once DB and store
 	// are available. This is designed to be idempotent.
-	if err := bootstrap.Run(context.Background(), cfg, st); err != nil {
-		log.Fatalf("bootstrap failed: %v", err)
+	if runMigrationsAndBootstrap {
+		if err := bootstrap.Run(context.Background(), cfg, st); err != nil {
+			log.Fatalf("bootstrap failed: %v", err)
+		}
 	}
 
 	// Set up logger

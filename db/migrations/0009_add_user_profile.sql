@@ -6,6 +6,7 @@ ALTER TABLE users
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS theme_preference TEXT NOT NULL DEFAULT 'system';
 
+-- +goose StatementBegin
 DO $$
 BEGIN
     BEGIN
@@ -18,6 +19,7 @@ BEGIN
     END;
 END
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
 

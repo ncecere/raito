@@ -8,6 +8,11 @@ services:
       POSTGRES_DB: raito
       POSTGRES_USER: raito
       POSTGRES_PASSWORD: raito
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raito -d raito -h localhost"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
     ports:
       - "5432:5432"
     volumes:
@@ -20,6 +25,11 @@ services:
     ports:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
     volumes:
       - raito-redis-data:/data
 
@@ -28,13 +38,14 @@ services:
     container_name: raito-searxng
     restart: unless-stopped
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     environment:
       # Base URL as seen from within the Docker network
       SEARXNG_BASE_URL: "http://searxng:8080"
     volumes:
       # Mount minimal settings.yml that enables JSON output
-      - ./searxng:/etc/searxng:ro
+      - ./searxng:/etc/searxng
     ports:
       # Expose SearxNG on the host for debugging (optional)
       - "8081:8080"
@@ -48,8 +59,15 @@ services:
     container_name: raito-api
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz >/dev/null || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
     volumes:
       - ./config:/app/config:ro
     # Note: for this all-in-docker setup, your database.dsn in config.yaml should
@@ -63,8 +81,8 @@ services:
     container_name: raito-worker-1
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
     volumes:
       - ./config:/app/config:ro
     command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "worker"]
@@ -74,8 +92,8 @@ services:
     container_name: raito-worker-2
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
     volumes:
       - ./config:/app/config:ro
     command: ["/app/raito-api", "-config", "/app/config/config.yaml", "-role", "worker"]

@@ -40,7 +40,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags embedwebui -t
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates chromium \
+RUN apk add --no-cache ca-certificates chromium curl \
     && adduser -D -g '' raito
 
 WORKDIR /app
